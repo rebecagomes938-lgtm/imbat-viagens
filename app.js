@@ -14,9 +14,9 @@ const brl=v=>v==null||v===""?"":"R$ "+Number(v).toLocaleString("pt-BR",{minimumF
 const parseBR=s=>{s=String(s||"").trim();if(!s)return null;const n=Number(s.replace(/[R$\s]/g,"").replace(/\./g,"").replace(",","."));return n>=0?n:NaN};
 const ALPHA="ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 /* Permissões */
-const PERMS=[["solicitar","Solicitar viagens","Envia pedidos e acompanha as próprias viagens"],["aprovar","Aprovar viagens","Aprova, reprova, sugere datas e registra alterações"],["valores","Ver valores","Vê valores de passagem, hospedagem e alterações"],["liberar","Liberar compra","Libera ou não a compra das passagens (financeiro)"],["relatorio","Relatório","Acessa o relatório de viagens"],["exportar","Exportar para Excel","Baixa os dados em planilha"],["cotar","Registrar cotações","Cadastra as 3 cotações de cada viagem"],["cadastrar","Criar logins","Cria logins de gerente; só a administração master altera acessos"]];
-const PRESETS={gerente:{solicitar:true},admin:{solicitar:true,aprovar:true,valores:true,relatorio:true,exportar:true,cotar:true},financeiro:{valores:true,liberar:true,relatorio:true,exportar:true},compras:{cotar:true,valores:true}};
-const PAPEIS={gerente:"Gerente",admin:"Administrador",financeiro:"Financeiro",compras:"Compras",personalizado:"Personalizado"};
+const PERMS=[["solicitar","Solicitar viagens","Envia pedidos e acompanha as próprias viagens"],["aprovar","Aprovar viagens","Aprova, reprova, sugere datas e registra alterações"],["valores","Ver valores","Vê valores de passagem, hospedagem e alterações"],["liberar","Escolher cotação","Escolhe a cotação aprovada e libera a compra (gestora)"],["relatorio","Relatório","Acessa o relatório de viagens"],["exportar","Exportar para Excel","Baixa os dados em planilha"],["cotar","Registrar cotações","Cadastra as 3 cotações de cada viagem"],["cadastrar","Criar logins","Cria logins de gerente; só a administração master altera acessos"]];
+const PRESETS={gerente:{solicitar:true},admin:{solicitar:true,aprovar:true,valores:true,liberar:true,relatorio:true,exportar:true,cotar:true},financeiro:{valores:true,relatorio:true,exportar:true},compras:{cotar:true,valores:true}};
+const PAPEIS={gerente:"Gerente",admin:"Gestora",financeiro:"Financeiro",compras:"Compras",personalizado:"Personalizado"};
 
 const S={sb:null,myId:null,me:null,isOwner:false,perfis:{},viagens:[],loaded:false,
   tab:null,action:null,draft:{},filter:"Todas",q:"",busy:false,newInvite:null,editInvite:null};
@@ -128,7 +128,7 @@ function tabList(){
   const lib=S.viagens.filter(v=>compraOf(v)==="Aguardando").length;
   if(can("solicitar"))t.push(["nova","Nova viagem"],["minhas","Minhas viagens",mineSug]);
   if(can("aprovar"))t.push(["decidir","Para decidir",pend],["todas","Todas as viagens"]);
-  if(can("liberar"))t.push(["liberar","Liberar compra",lib]);
+  if(can("liberar"))t.push(["liberar","Escolher cotação",lib]);
   if(can("valores"))t.push(["valores","Valores"]);
   if(can("relatorio"))t.push(["relatorio","Relatório"]);
   if(can("cotar"))t.push(["cotacoes","Cotações",S.viagens.filter(precisaCotar).length]);
@@ -154,11 +154,11 @@ function render(){
   if(novaForm&&novaForm.parentNode)novaForm.remove();
   if(S.tab==="minhas")return listView(view,S.viagens.filter(v=>v.solicitanteId===S.myId),"Você ainda não registrou viagens","Use a aba Nova viagem para enviar a primeira solicitação. Ela aparece aqui com o andamento da aprovação.");
   if(S.tab==="decidir")return listView(view,S.viagens.filter(v=>v.status==="Pendente"||pedAlt(v)),"Nenhuma viagem aguardando decisão","Novas solicitações e pedidos de troca de data aparecem aqui para você decidir.");
-  if(S.tab==="liberar")return listView(view,S.viagens.filter(v=>compraOf(v)==="Aguardando"),"Nenhuma compra aguardando liberação","Quando a liderança aprovar uma viagem com os valores, ela aparece aqui para você liberar ou não a compra.");
+  if(S.tab==="liberar")return listView(view,S.viagens.filter(v=>compraOf(v)==="Aguardando"),"Nenhuma cotação aguardando escolha","Quando uma viagem for aprovada com as 3 cotações, ela aparece aqui para você escolher a opção e liberar a compra.");
   if(S.tab==="todas")return allView(view);
   if(S.tab==="valores")return valuesView(view);
   if(S.tab==="relatorio")return reportView(view);
-  if(S.tab==="cotacoes")return listView(view,S.viagens.filter(precisaCotar),"Nenhuma viagem aguardando cotação","Viagens pedidas que ainda não têm as 3 cotações, ou em que o financeiro pediu novas cotações, aparecem aqui.");
+  if(S.tab==="cotacoes")return listView(view,S.viagens.filter(precisaCotar),"Nenhuma viagem aguardando cotação","Viagens pedidas que ainda não têm as 3 cotações, ou em que a gestora pediu novas cotações, aparecem aqui.");
   if(S.tab==="equipe")return S.isOwner?teamView(view):delegView(view);
 }
 
@@ -223,7 +223,7 @@ function quoteBlock(v,act,dr){
   else if(editing==="new")h+=`<div class="quotes">${quoteForm(v,{},dr)}</div>`;
   if(!c.length&&editing!=="new")h+=`<p class="hint">Nenhuma cotação registrada ainda.</p>`;
   if(!act&&cotar&&c.length<3)h+=`<div class="actions"><button class="btn sug" data-do="open-cot" data-q="new">Adicionar cotação ${LET[c.length]}</button></div>`;
-  if(!act&&cotar&&v.compra&&v.compra.novasCotacoes&&compraOf(v)==="Recusada")h+=`<div class="actions"><button class="btn primary" data-do="cotreenviar">Reenviar cotações ao financeiro</button></div>`;
+  if(!act&&cotar&&v.compra&&v.compra.novasCotacoes&&compraOf(v)==="Recusada")h+=`<div class="actions"><button class="btn primary" data-do="cotreenviar">Reenviar cotações para escolha</button></div>`;
   if(!act&&can("liberar")&&compraOf(v)==="Aguardando"&&c.length)h+=`<div class="actions"><button class="btn no" data-do="open-novascot">Pedir novas cotações</button></div>`;
   if(act==="novascot")h+=`<div class="inline-form"><label class="f">O que precisa mudar nas cotações?<textarea id="a-com-${v.id}">${esc(dr.com||"")}</textarea></label><div class="actions"><button class="btn no" data-do="novascot">Pedir novas cotações</button><button class="btn ghost" data-do="close">Cancelar</button><p class="msg err" data-msg></p></div></div>`;
   if(c.length&&c.length<3&&can("liberar")&&compraOf(v)==="Aguardando")h+=`<p class="hint">Atenção: esta viagem tem só ${c.length} cotaç${c.length>1?"ões":"ão"}.</p>`;
@@ -264,22 +264,22 @@ function quotePatch(v,what,qid,val,msgEl,now,hist){
   if(what==="cotdel"){if(!can("cotar"))return null;const q=c.find(x=>x.id===qid);
     return {cotacoes:c.filter(x=>x.id!==qid),historico:hist(`Removeu cotação ${q?q.fornecedor:""}`)}}
   if(what==="cotreenviar"){if(!can("cotar"))return null;
-    return {compra:{status:"Aguardando",porId:null,em:null,comentario:""},historico:hist("Reenviou as cotações ao financeiro")}}
+    return {compra:{status:"Aguardando",porId:null,em:null,comentario:""},historico:hist("Reenviou as cotações para escolha")}}
   if(what==="novascot"){if(!can("liberar"))return null;const com=val("com");if(!com){msgEl.textContent="Explique o que precisa mudar.";return null}
-    return {compra:{status:"Recusada",porId:S.myId,em:now,comentario:com,novasCotacoes:true},historico:hist("Financeiro pediu novas cotações: "+com)}}
+    return {compra:{status:"Recusada",porId:S.myId,em:now,comentario:com,novasCotacoes:true},historico:hist("Pediu novas cotações: "+com)}}
   if(what==="escolher"){if(!can("liberar"))return null;const q=c.find(x=>x.id===qid);if(!q)return null;
     const t=qTot(q),mn=qMin(v),mx=qMax(v);const com=val("com");
     if(t>mn&&!com){msgEl.textContent="Explique por que esta opção foi escolhida em vez da mais barata.";return null}
     return {compra:{status:"Liberada",porId:S.myId,em:now,comentario:com},valores:{passagem:q.passagem||0,hospedagem:q.hospedagem||0,outros:q.outros||0},valorEstimado:t,
       escolha:{cotacaoId:q.id,fornecedor:q.fornecedor,total:t,maisBarata:t===mn,economia:Math.max(0,mx-t),acimaDaMaisBarata:t-mn,porId:S.myId,em:now,justificativa:com,qtdCotacoes:c.length},
-      historico:hist(`Financeiro escolheu ${q.fornecedor} (${brl(t)}) e liberou o pagamento`+(t>mn?` — ${brl(t-mn)} acima da mais barata: ${com}`:""))}}
+      vooAprovado:{fornecedor:q.fornecedor,vooIda:q.vooIda,vooVolta:q.vooVolta,em:now},historico:hist(`Escolheu ${q.fornecedor} (${brl(t)}) e liberou a compra`+(t>mn?` — ${brl(t-mn)} acima da mais barata: ${com}`:""))}}
   return null;
 }
 
 function statusPill(s){const cls=s==="Pendente"||s==="Aprovada"||s==="Reprovada"?s:(s==="Nova data sugerida"?"sug":"neutral");
   return `<span class="pill ${cls}">${esc(s==="Pendente"?"Aguardando decisão":s)}</span>`}
 function compraPill(v){const c=compraOf(v);if(!c)return"";
-  const m={Aguardando:["Pendente","Compra: aguardando financeiro"],Liberada:["Aprovada","Compra liberada"],Recusada:["Reprovada","Compra não liberada"]}[c];
+  const m={Aguardando:["Pendente","Aguardando escolha da cotação"],Liberada:["Aprovada","Compra liberada"],Recusada:["Reprovada","Compra não liberada"]}[c];
   return `<span class="pill ${m[0]}">${m[1]}</span>`}
 const moneyIn=(id,label,val,extra)=>`<label class="f">${label}${extra||""}<input id="${id}" inputmode="decimal" value="${esc(val)}"></label>`;
 const fmtN=n=>n!=null?String(n).replace(".",","):"";
@@ -308,7 +308,8 @@ function card(v){
     h+=`<div class="note dec"><span><b>${v.status} por ${esc(nameOf(v.decisao.porId))}</b> em ${esc(fdt(v.decisao.em))}</span>${seesValues()&&totalOf(v)!=null?`<span>${v.valores?`Passagem ${esc(brl(v.valores.passagem||0))} · Hospedagem ${esc(brl(v.valores.hospedagem||0))} · Outros ${esc(brl(v.valores.outros||0))} · `:""}<b>Total ${esc(brl(totalOf(v)))}</b></span>`:""}${v.decisao.comentario?`<span>${esc(v.decisao.comentario)}</span>`:""}</div>`;
   }
   if(alts(v).length)h+=`<div class="note sug"><strong>Alterações de data (${alts(v).length})</strong>${alts(v).map(x=>`<span>${esc(fdt(x.em))} · ${esc(x.origem)}: ${x.idaNova!==x.idaAnterior?`ida ${esc(fd(x.idaAnterior))} → ${esc(fd(x.idaNova))} `:""}${x.voltaNova!==x.voltaAnterior?`volta ${esc(fd(x.voltaAnterior))} → ${esc(fd(x.voltaNova))}`:""}${x.motivo?` · ${esc(x.motivo)}`:""}${seesValues()?` · <b>custo ${esc(brl(x.custo||0))}</b>`:""}</span>`).join("")}</div>`;
-  if(v.compra&&(v.compra.status==="Liberada"||v.compra.status==="Recusada"))h+=`<div class="note dec"><span><b>Compra ${v.compra.status==="Liberada"?"liberada":"não liberada"} pelo financeiro</b> · ${esc(nameOf(v.compra.porId))} em ${esc(fdt(v.compra.em))}</span>${v.compra.comentario?`<span>${esc(v.compra.comentario)}</span>`:""}</div>`;
+  if(v.compra&&(v.compra.status==="Liberada"||v.compra.status==="Recusada"))h+=`<div class="note dec"><span><b>Compra ${v.compra.status==="Liberada"?"liberada":"não liberada"}</b> · ${esc(nameOf(v.compra.porId))} em ${esc(fdt(v.compra.em))}</span>${v.compra.comentario?`<span>${esc(v.compra.comentario)}</span>`:""}</div>`;
+  if(v.vooAprovado&&!canSeeQuotes())h+=`<div class="note dec"><strong>Voo aprovado</strong>${v.vooAprovado.fornecedor?`<span>Companhia: ${esc(v.vooAprovado.fornecedor)}</span>`:""}${v.vooAprovado.vooIda?`<span>Ida: ${esc(v.vooAprovado.vooIda)}</span>`:""}${v.vooAprovado.vooVolta?`<span>Volta: ${esc(v.vooAprovado.vooVolta)}</span>`:""}</div>`;
   const pa=pedAlt(v);
   if(pa)h+=`<div class="note sug"><strong>${esc(nameOf(pa.porId))} pediu troca de data em ${esc(fdt(pa.em))}</strong><span>${pa.ida!==v.ida?`Ida ${esc(fd(v.ida))} → <b>${esc(fd(pa.ida))}</b> `:""}${pa.volta!==v.volta?`Volta ${esc(fd(v.volta))} → <b>${esc(fd(pa.volta))}</b>`:""}</span><span>Motivo: ${esc(pa.motivo)}</span>${can("aprovar")?`<span>Consulte a companhia/hotel e registre a multa e a diferença tarifária para liberar a troca.</span>`:`<span>Aguardando a liderança verificar o custo da troca.</span>`}</div>`;
   if(v.pedidoAlteracao&&v.pedidoAlteracao.status==="Recusada"&&mine)h+=`<div class="note dec"><span><b>Troca de data não autorizada</b> por ${esc(nameOf(v.pedidoAlteracao.resolvidoPor))}</span>${v.pedidoAlteracao.resposta?`<span>${esc(v.pedidoAlteracao.resposta)}</span>`:""}</div>`;
@@ -319,11 +320,11 @@ function card(v){
   h+=quoteBlock(v,act,dr);
   // ações da liderança
   if(can("aprovar")&&v.status==="Pendente"&&!act)h+=`<div class="actions"><button class="btn ok" data-do="open-aprovar">Aprovar</button><button class="btn sug" data-do="open-sugerir">Sugerir outras datas</button><button class="btn no" data-do="open-reprovar">Reprovar</button></div>`;
-  if(act==="aprovar"||act==="valores"){const vv=v.valores||{};h+=`<div class="inline-form">${act==="aprovar"&&cots(v).length?`<p class="hint" style="margin:0">Esta viagem tem ${cots(v).length} cotaç${cots(v).length>1?"ões":"ão"} (menor: ${brl(qMin(v))}). Os valores serão os da opção que o financeiro escolher; deixe em branco ou informe um teto.</p>`:""}<div class="grid">${moneyIn("a-pas-"+v.id,"Passagem (R$)",dr.pas??fmtN(vv.passagem))}${moneyIn("a-hos-"+v.id,"Hospedagem (R$)",dr.hos??fmtN(vv.hospedagem))}${moneyIn("a-out-"+v.id,"Transporte e outros (R$)",dr.out??fmtN(vv.outros)," <small>opcional</small>")}<label class="f">Comentário <small>opcional</small><input id="a-com-${v.id}" value="${esc(dr.com||"")}"></label></div><div class="actions"><button class="btn ok" data-do="${act}">${act==="aprovar"?"Confirmar aprovação":"Salvar valores"}</button><button class="btn ghost" data-do="close">Cancelar</button><p class="msg err" data-msg></p></div></div>`}
+  if(act==="aprovar"||act==="valores"){const vv=v.valores||{};h+=`<div class="inline-form">${act==="aprovar"&&cots(v).length?`<p class="hint" style="margin:0">Esta viagem tem ${cots(v).length} cotaç${cots(v).length>1?"ões":"ão"} (menor: ${brl(qMin(v))}). Os valores serão os da opção que a gestora escolher; deixe em branco ou informe um teto.</p>`:""}<div class="grid">${moneyIn("a-pas-"+v.id,"Passagem (R$)",dr.pas??fmtN(vv.passagem))}${moneyIn("a-hos-"+v.id,"Hospedagem (R$)",dr.hos??fmtN(vv.hospedagem))}${moneyIn("a-out-"+v.id,"Transporte e outros (R$)",dr.out??fmtN(vv.outros)," <small>opcional</small>")}<label class="f">Comentário <small>opcional</small><input id="a-com-${v.id}" value="${esc(dr.com||"")}"></label></div><div class="actions"><button class="btn ok" data-do="${act}">${act==="aprovar"?"Confirmar aprovação":"Salvar valores"}</button><button class="btn ghost" data-do="close">Cancelar</button><p class="msg err" data-msg></p></div></div>`}
   if(act==="reprovar")h+=`<div class="inline-form"><label class="f">Motivo da reprovação<textarea id="a-com-${v.id}">${esc(dr.com||"")}</textarea></label><div class="actions"><button class="btn no" data-do="reprovar">Confirmar reprovação</button><button class="btn ghost" data-do="close">Cancelar</button><p class="msg err" data-msg></p></div></div>`;
   if(act==="sugerir")h+=`<div class="inline-form"><div class="grid"><label class="f">Nova ida<input type="date" id="a-ida-${v.id}" value="${esc(dr.ida||v.ida)}"></label><label class="f">Nova volta<input type="date" id="a-volta-${v.id}" value="${esc(dr.volta||v.volta)}"></label><label class="f full">Por que estas datas?<input id="a-com-${v.id}" placeholder="Ex.: tarifa R$ 250 mais barata no dia anterior" value="${esc(dr.com||"")}"></label></div><div class="actions"><button class="btn sug" data-do="sugerir">Enviar sugestão</button><button class="btn ghost" data-do="close">Cancelar</button><p class="msg err" data-msg></p></div></div>`;
-  if(act==="alterar")h+=`<div class="inline-form"><div class="grid"><label class="f">Nova ida<input type="date" id="a-ida-${v.id}" value="${esc(dr.ida||(pa&&pa.ida)||v.ida)}"></label><label class="f">Nova volta<input type="date" id="a-volta-${v.id}" value="${esc(dr.volta||(pa&&pa.volta)||v.volta)}"></label><label class="f">Quem causou a alteração<select id="a-ori-${v.id}">${ORIGENS.map(o=>`<option ${(dr.ori||(pa?"Colaborador":""))===o?"selected":""}>${o}</option>`).join("")}</select></label><label class="f">Motivo<input id="a-com-${v.id}" value="${esc(dr.com??(pa?pa.motivo:""))}" placeholder="Ex.: reunião com cliente remarcada"></label>${moneyIn("a-mul-"+v.id,"Multa (R$)",dr.mul||"")}${moneyIn("a-dif-"+v.id,"Diferença tarifária (R$)",dr.dif||"")}${moneyIn("a-tax-"+v.id,"Outras taxas (R$)",dr.tax||""," <small>opcional</small>")}</div><p class="hint">Se houver custo, a compra volta para o financeiro liberar o valor adicional.</p><div class="actions"><button class="btn sug" data-do="alterar">Registrar alteração</button><button class="btn ghost" data-do="close">Cancelar</button><p class="msg err" data-msg></p></div></div>`;
-  if(can("aprovar")&&v.status==="Aprovada"&&!act)h+=`<div class="actions">${pa?"":`<button class="btn sug" data-do="open-alterar">Registrar alteração de data</button>`}<button class="btn" data-do="open-valores">${compraOf(v)==="Recusada"?"Corrigir valores e reenviar ao financeiro":"Atualizar valores"}</button></div>`;
+  if(act==="alterar")h+=`<div class="inline-form"><div class="grid"><label class="f">Nova ida<input type="date" id="a-ida-${v.id}" value="${esc(dr.ida||(pa&&pa.ida)||v.ida)}"></label><label class="f">Nova volta<input type="date" id="a-volta-${v.id}" value="${esc(dr.volta||(pa&&pa.volta)||v.volta)}"></label><label class="f">Quem causou a alteração<select id="a-ori-${v.id}">${ORIGENS.map(o=>`<option ${(dr.ori||(pa?"Colaborador":""))===o?"selected":""}>${o}</option>`).join("")}</select></label><label class="f">Motivo<input id="a-com-${v.id}" value="${esc(dr.com??(pa?pa.motivo:""))}" placeholder="Ex.: reunião com cliente remarcada"></label>${moneyIn("a-mul-"+v.id,"Multa (R$)",dr.mul||"")}${moneyIn("a-dif-"+v.id,"Diferença tarifária (R$)",dr.dif||"")}${moneyIn("a-tax-"+v.id,"Outras taxas (R$)",dr.tax||""," <small>opcional</small>")}</div><p class="hint">Se houver custo, a compra volta para a gestora liberar o valor adicional.</p><div class="actions"><button class="btn sug" data-do="alterar">Registrar alteração</button><button class="btn ghost" data-do="close">Cancelar</button><p class="msg err" data-msg></p></div></div>`;
+  if(can("aprovar")&&v.status==="Aprovada"&&!act)h+=`<div class="actions">${pa?"":`<button class="btn sug" data-do="open-alterar">Registrar alteração de data</button>`}<button class="btn" data-do="open-valores">${compraOf(v)==="Recusada"?"Corrigir valores e reenviar":"Atualizar valores"}</button></div>`;
   // ações do financeiro
   if(can("liberar")&&compraOf(v)==="Aguardando"&&!act&&!cots(v).length)h+=`<div class="actions"><button class="btn ok" data-do="open-liberar">Liberar compra</button><button class="btn no" data-do="open-negar">Não liberar</button></div>`;
   if(act==="liberar"||act==="negar")h+=`<div class="inline-form"><label class="f">${act==="negar"?"Motivo":"Observação <small>opcional</small>"}<textarea id="a-com-${v.id}">${esc(dr.com||"")}</textarea></label><div class="actions"><button class="btn ${act==="negar"?"no":"ok"}" data-do="${act}">${act==="negar"?"Confirmar: não liberar":"Confirmar liberação"}</button><button class="btn ghost" data-do="close">Cancelar</button><p class="msg err" data-msg></p></div></div>`;
@@ -363,7 +364,7 @@ async function saveCsv(name,cols,rows,msgSel){
 }
 function exportCsv(msgSel){
   const sv=seesValues();
-  const cols=["Protocolo","Data da solicitação","Colaborador","Departamento","Solicitado por","Cidade de origem","Cidade de destino","Data de ida","Data de volta","Ida original","Volta original","Horário preferencial","Motivo","Evento relacionado","Necessita hospedagem?","Diárias","Transporte local?","Status","Observações",...(sv?["Passagem (R$)","Hospedagem (R$)","Outros (R$)","Valor original (R$)","Nº de alterações","Custo das alterações (R$)","Total final (R$)","Observação sobre valores"]:[]),"Decidido por","Data da decisão","Comentário da decisão","Compra (financeiro)","Compra decidida por","Data da decisão da compra","Comentário do financeiro"];
+  const cols=["Protocolo","Data da solicitação","Colaborador","Departamento","Solicitado por","Cidade de origem","Cidade de destino","Data de ida","Data de volta","Ida original","Volta original","Horário preferencial","Motivo","Evento relacionado","Necessita hospedagem?","Diárias","Transporte local?","Status","Observações",...(sv?["Passagem (R$)","Hospedagem (R$)","Outros (R$)","Valor original (R$)","Nº de alterações","Custo das alterações (R$)","Total final (R$)","Observação sobre valores"]:[]),"Decidido por","Data da decisão","Comentário da decisão","Compra","Compra decidida por","Data da decisão da compra","Comentário do financeiro"];
   const rows=sortTrips(S.viagens).reverse().map(v=>[v.codigo,brD(v.criadoEm),v.colaborador,v.departamento,nameOf(v.solicitanteId),v.origem,v.destino,brD(v.ida),brD(v.volta),brD(v.datasOriginais&&v.datasOriginais.ida),brD(v.datasOriginais&&v.datasOriginais.volta),v.horario,v.motivo,v.evento,v.hospedagem,v.hospedagem==="Sim"?nights(v.ida,v.volta):0,v.transporte,v.status==="Pendente"?"Aguardando aprovação":v.status,v.observacoes,
     ...(sv?[fmtN(v.valores&&v.valores.passagem),fmtN(v.valores&&v.valores.hospedagem),fmtN(v.valores&&v.valores.outros),fmtN(totalOf(v)),alts(v).length,fmtN(altCost(v)),fmtN(totalFinal(v)),obsAlt(v)]:[]),
     v.decisao?nameOf(v.decisao.porId):"",v.decisao?brD(v.decisao.em):"",v.decisao?v.decisao.comentario:"",compraOf(v)||"",v.compra&&v.compra.porId?nameOf(v.compra.porId):"",v.compra&&v.compra.em?brD(v.compra.em):"",v.compra?v.compra.comentario:""]);
@@ -493,7 +494,9 @@ function loginScreen(aviso){
 /* Cadastros: chamam a função "usuarios" no servidor, que confere quem pode fazer o quê */
 async function adminCall(body){
   const {data,error}=await S.sb.functions.invoke(CONFIG.funcao,{body});
-  if(error){let m="Não foi possível concluir agora. Tente de novo.";try{const j=await error.context.json();if(j&&j.error)m=j.error}catch(_){}throw {message:m}}
+  if(error){let m="Não foi possível concluir agora. Tente de novo.",det=error.name||"";
+    try{const st=error.context&&error.context.status;const j=await error.context.json();if(j&&j.error)m=j.error;else if(j&&(j.msg||j.message))det+=` ${st}: ${j.msg||j.message}`;else if(st)det+=` ${st}`}catch(_){det+=" "+(error.message||"")}
+    if(m.startsWith("Não foi possível concluir"))m+=` (detalhe técnico: ${det.trim()||"sem resposta"})`;throw {message:m}}
   if(data&&data.error)throw {message:data.error};
   return data;
 }
@@ -635,7 +638,7 @@ async function doAction(id,what,btn){
   if(what==="aceitar"&&v.solicitanteId===S.myId){const sg=v.sugestao;patch={status:"Pendente",ida:sg.ida,volta:sg.volta,datasOriginais:v.datasOriginais||{ida:v.ida,volta:v.volta},sugestao:{...sg,resposta:"Aceita",respondidoEm:now},historico:hist(`Aceitou as novas datas (${fd(sg.ida)} a ${fd(sg.volta)})`)}}
   if(what==="recusar"&&v.solicitanteId===S.myId){patch={status:"Pendente",sugestao:{...v.sugestao,resposta:"Recusada",respondidoEm:now},historico:hist("Manteve as datas originais")}}
   if(what==="liberar"||what==="negar"){const com=val("com");if(what==="negar"&&!com){msgEl.textContent="Explique o motivo para a liderança poder corrigir.";return}
-    patch={compra:{status:what==="liberar"?"Liberada":"Recusada",porId:S.myId,em:now,comentario:com},historico:hist(what==="liberar"?"Financeiro liberou a compra":"Financeiro não liberou a compra: "+com)}}
+    patch={compra:{status:what==="liberar"?"Liberada":"Recusada",porId:S.myId,em:now,comentario:com},historico:hist(what==="liberar"?"Liberou a compra":"Não liberou a compra: "+com)}}
   if(what==="pedir"&&v.solicitanteId===S.myId&&!pedAlt(v)){const i=val("ida"),o=val("volta"),com=val("com");
     if(!i||!o){msgEl.textContent="Informe a nova ida e a nova volta.";return}
     if(o<i){msgEl.textContent="A nova volta é anterior à nova ida.";return}
