@@ -213,7 +213,7 @@ table.months{min-width:900px;font-size:12px}
 
 <template id="tpl-nova">
   <form class="panel" id="form-nova" novalidate>
-    <div><h2>Nova solicitação de viagem</h2><p class="hint">Preencha os dados da viagem. A liderança vai analisar e aprovar, reprovar ou sugerir outras datas.</p></div>
+    <div><h2>Nova solicitação de viagem</h2><p class="hint">Todos os campos são obrigatórios. A liderança vai analisar e aprovar, reprovar ou sugerir outras datas.</p></div>
     <div class="grid">
       <label class="f">Quem vai viajar<input id="n-colab" required></label>
       <label class="f">Departamento<select id="n-dep"><option>Comercial</option><option>Marketing</option><option>Financeiro</option><option>Administrativo</option><option>Outro</option></select></label>
@@ -221,14 +221,16 @@ table.months{min-width:900px;font-size:12px}
       <label class="f">Cidade de destino<input id="n-destino" placeholder="Ex.: São Paulo" required></label>
       <label class="f">Data de ida<input type="date" id="n-ida" required></label>
       <label class="f">Data de volta<input type="date" id="n-volta" required></label>
+      <div class="f full"><label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="n-voltadif" style="width:auto"> A volta é para um destino diferente</label>
+        <div class="grid" id="n-voltabox" hidden style="margin-top:8px"><label class="f">Volta saindo de<input id="n-voltade" placeholder="Ex.: Rio de Janeiro"></label><label class="f">Volta chegando em<input id="n-voltapara" placeholder="Ex.: Cuiabá"></label></div></div>
       <label class="f">Horário preferencial<select id="n-hora"><option>Manhã</option><option>Tarde</option><option>Noite</option><option selected>Indiferente</option></select></label>
       <label class="f">Motivo<select id="n-motivo"><option>Feira / exposição</option><option>Visita comercial</option><option>Reunião</option><option>Treinamento</option><option>Evento de marketing</option><option>Outro</option></select></label>
-      <label class="f full">Evento relacionado <small>opcional</small><input id="n-evento" placeholder="Nome da feira, exposição ou cliente"></label>
+      <label class="f full">Cliente que vai visitar <small>ou feira / evento</small><input id="n-evento" placeholder="Ex.: Construtora Alfa (Contagem), Feira Fenasan" required></label>
       <div class="f full" style="display:flex;gap:18px;flex-wrap:wrap">
         <div><div style="font-size:13px;font-weight:500;margin-bottom:5px">Precisa de hospedagem?</div><div class="seg"><label><input type="radio" name="n-hosp" value="Sim" checked> Sim</label><label><input type="radio" name="n-hosp" value="Não"> Não</label></div></div>
         <div><div style="font-size:13px;font-weight:500;margin-bottom:5px">Precisa de transporte local?</div><div class="seg"><label><input type="radio" name="n-transp" value="Sim"> Sim</label><label><input type="radio" name="n-transp" value="Não" checked> Não</label></div></div>
       </div>
-      <label class="f full">Observações <small>opcional</small><textarea id="n-obs" placeholder="Horário do evento, preferências, flexibilidade de datas…"></textarea></label>
+      <label class="f full">Observações<textarea id="n-obs" placeholder="Horário do evento, preferências, flexibilidade de datas…"></textarea></label>
     </div>
     <div class="actions"><button class="btn primary" type="submit" id="n-enviar">Enviar solicitação</button><p class="msg" id="n-msg" role="status"></p></div>
   </form>
