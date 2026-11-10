@@ -50,7 +50,7 @@ async function saveTrip(v,patch){
 async function addTrip(d,now){
   const {error}=await S.sb.from("viagens").insert({codigo:tripCode(),solicitante_id:S.myId,status:"Pendente",colaborador:d.colaborador,departamento:d.departamento,
     origem:d.origem,destino:d.destino,ida:d.ida,volta:d.volta,horario:d.horario,motivo:d.motivo,evento:d.evento,hospedagem:d.hospedagem,transporte:d.transporte,
-    observacoes:d.observacoes,doc:{historico:[{em:now,porId:S.myId,acao:"Solicitação enviada"}]}});
+    observacoes:d.observacoes,doc:{...(d.voltaDif?{rotaVolta:{de:d.voltaDe,para:d.voltaPara}}:{}),historico:[{em:now,porId:S.myId,acao:"Solicitação enviada"}]}});
   if(error)throw dbErr(error);await loadAll();
 }
 async function loadAll(){
@@ -111,6 +111,9 @@ const totalOf=v=>{const x=v.valores;if(x)return (x.passagem||0)+(x.hospedagem||0
 const alts=v=>Array.isArray(v.alteracoes)?v.alteracoes:[];
 const altCost=v=>alts(v).reduce((a,x)=>a+(x.custo||0),0);
 const totalFinal=v=>{const t=totalOf(v);const c=altCost(v);return t==null&&!c?null:(t||0)+c};
+const precisaFb=v=>v.status==="Aprovada"&&!!v.volta&&v.volta<=today()&&!v.feedback;
+const fbPend=()=>S.viagens.filter(v=>v.solicitanteId===S.myId&&precisaFb(v));
+const rotaVolta=v=>v.rotaVolta&&v.rotaVolta.para?v.rotaVolta:null;
 const ORIGENS=["Colaborador","Companhia aérea","Agenda da empresa","Outro motivo externo"];
 const pedAlt=v=>v.pedidoAlteracao&&v.pedidoAlteracao.status==="Pendente"?v.pedidoAlteracao:null;
 const compraOf=v=>v.status!=="Aprovada"?null:((v.compra&&v.compra.status)||"Aguardando");
@@ -126,7 +129,7 @@ function tabList(){
   const pend=S.viagens.filter(v=>v.status==="Pendente"||pedAlt(v)).length;
   const mineSug=S.viagens.filter(v=>v.solicitanteId===S.myId&&v.status==="Nova data sugerida").length;
   const lib=S.viagens.filter(v=>compraOf(v)==="Aguardando").length;
-  if(can("solicitar"))t.push(["nova","Nova viagem"],["minhas","Minhas viagens",mineSug]);
+  if(can("solicitar"))t.push(["nova","Nova viagem"],["minhas","Minhas viagens",mineSug+fbPend().length]);
   if(can("aprovar"))t.push(["decidir","Para decidir",pend],["todas","Todas as viagens"]);
   if(can("liberar"))t.push(["liberar","Escolher cotação",lib]);
   if(can("valores"))t.push(["valores","Valores"]);
@@ -150,6 +153,9 @@ function render(){
   const list=tabList();
   if(!list.length){$("#tabs").hidden=true;view.innerHTML=`<div class="gate"><h2>Nenhuma área liberada</h2><p class="hint">Seu cadastro está ativo, mas nenhuma área foi liberada para você ainda. Fale com a administração.</p></div>`;return}
   $("#tabs").hidden=false;tabs(list);
+  if(S.tab==="nova"&&fbPend().length){if(novaForm&&novaForm.parentNode)novaForm.remove();const fp=fbPend();
+    view.innerHTML=`<div class="empty"><b>Feedback pendente</b><span>Antes de pedir uma nova viagem, envie o feedback de ${fp.length>1?"suas viagens":"sua viagem"} ${fp.map(v=>esc(v.codigo)+" ("+esc(v.destino)+")").join(", ")}.</span><div class="actions" style="justify-content:center"><button class="btn primary" type="button" id="go-fb">Enviar feedback agora</button></div></div>`;
+    view.querySelector("#go-fb").onclick=()=>{S.tab="minhas";render()};return}
   if(S.tab==="nova"){if(!novaForm)novaForm=buildNova();if(view.firstChild!==novaForm){view.innerHTML="";view.appendChild(novaForm)}return}
   if(novaForm&&novaForm.parentNode)novaForm.remove();
   if(S.tab==="minhas")return listView(view,S.viagens.filter(v=>v.solicitanteId===S.myId),"Você ainda não registrou viagens","Use a aba Nova viagem para enviar a primeira solicitação. Ela aparece aqui com o andamento da aprovação.");
@@ -168,12 +174,18 @@ function buildNova(){
   const reset=()=>{f.querySelector("#n-colab").value=c.nome||(S.isOwner?nameOf(S.myId):"");if(c.departamento)f.querySelector("#n-dep").value=c.departamento};reset();
   f.querySelector("#n-ida").min=today();f.querySelector("#n-volta").min=today();
   f.querySelector("#n-ida").addEventListener("change",e=>{f.querySelector("#n-volta").min=e.target.value||today()});
+  const vd=f.querySelector("#n-voltadif"),vb=f.querySelector("#n-voltabox");
+  vd.onchange=()=>{vb.hidden=!vd.checked;if(vd.checked&&!f.querySelector("#n-voltade").value)f.querySelector("#n-voltade").value=f.querySelector("#n-destino").value.trim()};
+  f.addEventListener("reset",()=>setTimeout(()=>{vb.hidden=true},0));
   f.onsubmit=async e=>{e.preventDefault();if(S.busy)return;
     const g=id=>f.querySelector(id).value.trim();const msg=f.querySelector("#n-msg");
     const d={colaborador:g("#n-colab"),departamento:g("#n-dep"),origem:g("#n-origem"),destino:g("#n-destino"),ida:g("#n-ida"),volta:g("#n-volta"),horario:g("#n-hora"),motivo:g("#n-motivo"),evento:g("#n-evento"),
-      hospedagem:f.querySelector('input[name="n-hosp"]:checked').value,transporte:f.querySelector('input[name="n-transp"]:checked').value,observacoes:g("#n-obs")};
-    const miss=[["colaborador","quem vai viajar"],["origem","a cidade de origem"],["destino","a cidade de destino"],["ida","a data de ida"],["volta","a data de volta"]].filter(([k])=>!d[k]).map(x=>x[1]);
+      hospedagem:f.querySelector('input[name="n-hosp"]:checked').value,transporte:f.querySelector('input[name="n-transp"]:checked').value,observacoes:g("#n-obs"),
+      voltaDif:f.querySelector("#n-voltadif").checked,voltaDe:g("#n-voltade"),voltaPara:g("#n-voltapara")};
+    const miss=[["colaborador","quem vai viajar"],["departamento","o departamento"],["origem","a cidade de origem"],["destino","a cidade de destino"],["ida","a data de ida"],["volta","a data de volta"],
+      ...(d.voltaDif?[["voltaDe","de onde sai a volta"],["voltaPara","para onde é a volta"]]:[]),["horario","o horário preferencial"],["motivo","o motivo"],["evento","o cliente que vai visitar"],["observacoes","as observações"]].filter(([k])=>!d[k]).map(x=>x[1]);
     msg.className="msg err";
+    if(fbPend().length){msg.textContent="Envie primeiro o feedback da viagem anterior, em Minhas viagens.";return}
     if(miss.length){msg.textContent="Falta preencher "+miss.join(", ")+".";return}
     if(d.ida<today()){msg.textContent="A data de ida já passou. Escolha uma data a partir de hoje.";return}
     if(d.volta<d.ida){msg.textContent="A data de volta é anterior à data de ida.";return}
@@ -288,7 +300,7 @@ function card(v){
   const n=nights(v.ida,v.volta);const mine=v.solicitanteId===S.myId;
   const act=S.action&&S.action.id===v.id?S.action.kind:null;const dr=S.draft[v.id]||{};
   let h=`<article class="trip" data-id="${esc(v.id)}"><div class="head"><div style="min-width:0"><div class="code">${esc(v.codigo)} · enviada em ${esc(fdt(v.criadoEm))}</div>
-  <p class="route">${esc(v.origem)}<span class="arr" aria-hidden="true">→</span>${esc(v.destino)}</p></div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">${statusPill(v.status)}${pedAlt(v)?`<span class="pill sug">Troca de data pedida</span>`:""}${compraPill(v)}</div></div>
+  <p class="route">${esc(v.origem)}<span class="arr" aria-hidden="true">→</span>${esc(v.destino)}${rotaVolta(v)&&rotaVolta(v).de===v.destino?`<span class="arr" aria-hidden="true">→</span>${esc(rotaVolta(v).para)}`:""}</p>${rotaVolta(v)?`<div class="code">Volta: ${esc(rotaVolta(v).de)} → ${esc(rotaVolta(v).para)} (destino diferente da origem)</div>`:""}</div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">${statusPill(v.status)}${pedAlt(v)?`<span class="pill sug">Troca de data pedida</span>`:""}${compraPill(v)}${precisaFb(v)?`<span class="pill Pendente">Feedback pendente</span>`:""}${v.feedback?`<span class="pill Aprovada">Feedback enviado</span>`:""}</div></div>
   <div class="dates"><div><span class="k">Ida</span><span class="v">${fd(v.ida)}</span>${v.datasOriginais&&v.datasOriginais.ida!==v.ida?`<span class="was">${fd(v.datasOriginais.ida)}</span>`:""}</div>
   <div><span class="k">Volta</span><span class="v">${fd(v.volta)}</span>${v.datasOriginais&&v.datasOriginais.volta!==v.volta?`<span class="was">${fd(v.datasOriginais.volta)}</span>`:""}</div>
   <div><span class="k">Noites</span><span class="v">${v.hospedagem==="Sim"?n:"Sem hotel"}</span></div>
@@ -296,7 +308,8 @@ function card(v){
   <hr class="perf"><div class="body"><div class="meta">
   <div><span class="k">Viajante</span>${esc(v.colaborador)} · ${esc(v.departamento)}</div>
   <div><span class="k">Solicitado por</span>${esc(nameOf(v.solicitanteId))}</div>
-  <div><span class="k">Motivo</span>${esc(v.motivo)}${v.evento?" · "+esc(v.evento):""}</div>
+  <div><span class="k">Motivo</span>${esc(v.motivo)}</div>
+  <div><span class="k">Cliente / feira</span>${esc(v.evento||"—")}</div>
   <div><span class="k">Transporte local</span>${esc(v.transporte)}</div>
   ${v.observacoes?`<div style="grid-column:1/-1"><span class="k">Observações</span>${esc(v.observacoes)}</div>`:""}</div>`;
   if(v.sugestao&&v.status==="Nova data sugerida"){
@@ -315,7 +328,7 @@ function card(v){
   if(v.pedidoAlteracao&&v.pedidoAlteracao.status==="Recusada"&&mine)h+=`<div class="note dec"><span><b>Troca de data não autorizada</b> por ${esc(nameOf(v.pedidoAlteracao.resolvidoPor))}</span>${v.pedidoAlteracao.resposta?`<span>${esc(v.pedidoAlteracao.resposta)}</span>`:""}</div>`;
   if(pa&&can("aprovar")&&!act)h+=`<div class="actions"><button class="btn sug" data-do="open-alterar">Registrar custo e aprovar troca</button><button class="btn no" data-do="open-recusaralt">Não autorizar troca</button></div>`;
   if(act==="recusaralt")h+=`<div class="inline-form"><label class="f">Motivo<textarea id="a-com-${v.id}">${esc(dr.com||"")}</textarea></label><div class="actions"><button class="btn no" data-do="recusaralt">Confirmar: não autorizar</button><button class="btn ghost" data-do="close">Cancelar</button><p class="msg err" data-msg></p></div></div>`;
-  if(mine&&can("solicitar")&&v.status==="Aprovada"&&!pa&&!act)h+=`<div class="actions"><button class="btn" data-do="open-pedir">Pedir troca de data</button></div>`;
+  if(mine&&can("solicitar")&&v.status==="Aprovada"&&!pa&&!act&&!precisaFb(v)&&!v.feedback)h+=`<div class="actions"><button class="btn" data-do="open-pedir">Pedir troca de data</button></div>`;
   if(act==="pedir")h+=`<div class="inline-form"><div class="grid"><label class="f">Nova ida<input type="date" id="a-ida-${v.id}" value="${esc(dr.ida||v.ida)}"></label><label class="f">Nova volta<input type="date" id="a-volta-${v.id}" value="${esc(dr.volta||v.volta)}"></label><label class="f full">Por que precisa trocar?<textarea id="a-com-${v.id}">${esc(dr.com||"")}</textarea></label></div><p class="hint">A troca pode ter multa e diferença de tarifa. A liderança verifica o custo e decide.</p><div class="actions"><button class="btn primary" data-do="pedir">Enviar pedido de troca</button><button class="btn ghost" data-do="close">Cancelar</button><p class="msg err" data-msg></p></div></div>`;
   h+=quoteBlock(v,act,dr);
   // ações da liderança
@@ -331,6 +344,17 @@ function card(v){
   // ações do solicitante
   if(mine&&(v.status==="Pendente"||v.status==="Nova data sugerida")&&!act)h+=`<div class="actions"><button class="btn ghost" data-do="open-cancelar">Cancelar esta solicitação</button></div>`;
   if(act==="cancelar")h+=`<div class="inline-form"><span>Cancelar a solicitação ${esc(v.codigo)}? Ela continua no histórico como cancelada.</span><div class="actions"><button class="btn no" data-do="cancelar">Sim, cancelar</button><button class="btn ghost" data-do="close">Voltar</button><p class="msg err" data-msg></p></div></div>`;
+  // feedback obrigatório depois da volta
+  if(v.feedback){const fb=v.feedback;h+=`<div class="note dec"><strong>Feedback da viagem · ${esc(nameOf(fb.porId))} em ${esc(fdt(fb.em))}</strong><span><b>Clientes visitados:</b> ${esc(fb.clientes)}</span><span><b>O que foi fazer:</b> ${esc(fb.objetivo)}</span><span><b>O que foi cumprido:</b> ${esc(fb.cumprido)}</span><span><b>Objetivo atingido:</b> ${esc(fb.atingido)}</span><span><b>Cadastrou clientes no sistema?</b> ${esc(fb.cadastros)}${fb.cadastros==="Sim"?" · "+esc(fb.cadastrosQuais):""}</span></div>`}
+  else if(precisaFb(v)&&mine)h+=`<div class="inline-form"><div><strong>Feedback obrigatório da viagem</strong><p class="hint" style="margin:4px 0 0">A viagem terminou em ${esc(fd(v.volta))}. Conte como foi. Você só consegue pedir uma nova viagem depois de enviar este feedback.</p></div><div class="grid">
+    <label class="f full">Quais clientes você visitou?<textarea id="a-fbcli-${v.id}" placeholder="Um cliente por linha">${esc(dr.fbcli!=null?dr.fbcli:(v.evento||""))}</textarea></label>
+    <label class="f full">O que você foi fazer lá?<textarea id="a-fbobj-${v.id}" placeholder="Ex.: apresentar a linha de luvas, negociar contrato">${esc(dr.fbobj||"")}</textarea></label>
+    <label class="f full">O que foi cumprido?<textarea id="a-fbcump-${v.id}" placeholder="Resultados, pedidos fechados, próximos passos">${esc(dr.fbcump||"")}</textarea></label>
+    <label class="f">O objetivo foi atingido?<select id="a-fbating-${v.id}">${["","Sim","Parcialmente","Não"].map(o=>`<option value="${o}" ${dr.fbating===o?"selected":""}>${o||"Escolha"}</option>`).join("")}</select></label>
+    <label class="f">Cadastrou novos clientes no sistema?<select id="a-fbcad-${v.id}">${["","Sim","Não"].map(o=>`<option value="${o}" ${dr.fbcad===o?"selected":""}>${o||"Escolha"}</option>`).join("")}</select></label>
+    <label class="f full">Se sim, quais clientes foram cadastrados?<textarea id="a-fbcadq-${v.id}">${esc(dr.fbcadq||"")}</textarea></label></div>
+    <div class="actions"><button class="btn primary" data-do="feedback">Enviar feedback</button><p class="msg err" data-msg></p></div></div>`;
+  else if(precisaFb(v))h+=`<div class="note sug"><strong>Feedback pendente</strong><span>A viagem terminou em ${esc(fd(v.volta))} e ${esc(nameOf(v.solicitanteId))} ainda não enviou o feedback.</span></div>`;
   const hist=(v.historico||[]).slice().reverse();
   h+=`<details class="hist"><summary>Histórico (${hist.length})</summary><ol>${hist.map(x=>`<li>${esc(fdt(x.em))} · ${esc(nameOf(x.porId))}: ${esc(x.acao)}</li>`).join("")}</ol></details></div></article>`;
   return h;
@@ -341,13 +365,14 @@ function listView(view,arr,et,ed){
   view.innerHTML=arr.length?`<div class="list">${sortTrips(arr).map(card).join("")}</div>`:`<div class="empty"><b>${esc(et)}</b><span>${esc(ed)}</span></div>`;
   wire(view);
 }
-const FILTERS=["Todas","Pendente","Nova data sugerida","Aprovada","Reprovada","Cancelada pelo solicitante"];
+const FILTERS=["Todas","Pendente","Nova data sugerida","Aprovada","Reprovada","Cancelada pelo solicitante","Feedback pendente","Com feedback"];
+const fMatch=(v,f)=>f==="Todas"||(f==="Feedback pendente"?precisaFb(v):f==="Com feedback"?!!v.feedback:v.status===f);
 function searchBox(view,id,key){const qi=view.querySelector("#"+id);qi.oninput=()=>{S[key]=qi.value;const pos=qi.selectionStart;render();const n=$("#"+id);n.focus();n.setSelectionRange(pos,pos)}}
 function allView(view){
   const q=S.q.toLowerCase();
-  const arr=S.viagens.filter(v=>(S.filter==="Todas"||v.status===S.filter)&&(!q||[v.codigo,v.colaborador,v.destino,v.origem,v.evento,nameOf(v.solicitanteId)].join(" ").toLowerCase().includes(q)));
+  const arr=S.viagens.filter(v=>fMatch(v,S.filter)&&(!q||[v.codigo,v.colaborador,v.destino,v.origem,v.evento,nameOf(v.solicitanteId)].join(" ").toLowerCase().includes(q)));
   view.innerHTML=`<div class="panel" style="gap:12px"><div class="toolbar"><input id="t-q" type="search" placeholder="Buscar por nome, destino ou código" value="${esc(S.q)}">${can("exportar")?`<button class="btn" id="t-csv" type="button">Exportar para Excel (CSV)</button>`:""}<p class="msg" id="t-msg" role="status"></p></div>
-  <div class="chips">${FILTERS.map(f=>`<button type="button" data-f="${esc(f)}" aria-pressed="${S.filter===f}">${esc(f==="Pendente"?"Aguardando decisão":f)} <span style="font-family:var(--f-mono)">${f==="Todas"?S.viagens.length:S.viagens.filter(v=>v.status===f).length}</span></button>`).join("")}</div></div>
+  <div class="chips">${FILTERS.map(f=>`<button type="button" data-f="${esc(f)}" aria-pressed="${S.filter===f}">${esc(f==="Pendente"?"Aguardando decisão":f)} <span style="font-family:var(--f-mono)">${S.viagens.filter(v=>fMatch(v,f)).length}</span></button>`).join("")}</div></div>
   <div style="margin-top:12px">${arr.length?`<div class="list">${sortTrips(arr).map(card).join("")}</div>`:`<div class="empty"><b>Nenhuma viagem encontrada</b><span>${S.viagens.length?"Mude o filtro ou a busca para ver outras viagens.":"As solicitações enviadas vão aparecer aqui."}</span></div>`}</div>`;
   searchBox(view,"t-q","q");
   view.querySelectorAll("[data-f]").forEach(b=>b.onclick=()=>{S.filter=b.dataset.f;render()});
@@ -364,10 +389,10 @@ async function saveCsv(name,cols,rows,msgSel){
 }
 function exportCsv(msgSel){
   const sv=seesValues();
-  const cols=["Protocolo","Data da solicitação","Colaborador","Departamento","Solicitado por","Cidade de origem","Cidade de destino","Data de ida","Data de volta","Ida original","Volta original","Horário preferencial","Motivo","Evento relacionado","Necessita hospedagem?","Diárias","Transporte local?","Status","Observações",...(sv?["Passagem (R$)","Hospedagem (R$)","Outros (R$)","Valor original (R$)","Nº de alterações","Custo das alterações (R$)","Total final (R$)","Observação sobre valores"]:[]),"Decidido por","Data da decisão","Comentário da decisão","Compra","Compra decidida por","Data da decisão da compra","Comentário do financeiro"];
-  const rows=sortTrips(S.viagens).reverse().map(v=>[v.codigo,brD(v.criadoEm),v.colaborador,v.departamento,nameOf(v.solicitanteId),v.origem,v.destino,brD(v.ida),brD(v.volta),brD(v.datasOriginais&&v.datasOriginais.ida),brD(v.datasOriginais&&v.datasOriginais.volta),v.horario,v.motivo,v.evento,v.hospedagem,v.hospedagem==="Sim"?nights(v.ida,v.volta):0,v.transporte,v.status==="Pendente"?"Aguardando aprovação":v.status,v.observacoes,
+  const cols=["Protocolo","Data da solicitação","Colaborador","Departamento","Solicitado por","Cidade de origem","Cidade de destino","Data de ida","Data de volta","Ida original","Volta original","Volta saindo de","Volta chegando em","Horário preferencial","Motivo","Cliente / feira","Necessita hospedagem?","Diárias","Transporte local?","Status","Observações",...(sv?["Passagem (R$)","Hospedagem (R$)","Outros (R$)","Valor original (R$)","Nº de alterações","Custo das alterações (R$)","Total final (R$)","Observação sobre valores"]:[]),"Decidido por","Data da decisão","Comentário da decisão","Compra","Compra decidida por","Data da decisão da compra","Comentário da compra","Feedback","Data do feedback","Clientes visitados","O que foi fazer","O que foi cumprido","Objetivo atingido","Cadastrou clientes?","Clientes cadastrados"];
+  const rows=sortTrips(S.viagens).reverse().map(v=>[v.codigo,brD(v.criadoEm),v.colaborador,v.departamento,nameOf(v.solicitanteId),v.origem,v.destino,brD(v.ida),brD(v.volta),brD(v.datasOriginais&&v.datasOriginais.ida),brD(v.datasOriginais&&v.datasOriginais.volta),rotaVolta(v)?rotaVolta(v).de:"",rotaVolta(v)?rotaVolta(v).para:"",v.horario,v.motivo,v.evento,v.hospedagem,v.hospedagem==="Sim"?nights(v.ida,v.volta):0,v.transporte,v.status==="Pendente"?"Aguardando aprovação":v.status,v.observacoes,
     ...(sv?[fmtN(v.valores&&v.valores.passagem),fmtN(v.valores&&v.valores.hospedagem),fmtN(v.valores&&v.valores.outros),fmtN(totalOf(v)),alts(v).length,fmtN(altCost(v)),fmtN(totalFinal(v)),obsAlt(v)]:[]),
-    v.decisao?nameOf(v.decisao.porId):"",v.decisao?brD(v.decisao.em):"",v.decisao?v.decisao.comentario:"",compraOf(v)||"",v.compra&&v.compra.porId?nameOf(v.compra.porId):"",v.compra&&v.compra.em?brD(v.compra.em):"",v.compra?v.compra.comentario:""]);
+    v.decisao?nameOf(v.decisao.porId):"",v.decisao?brD(v.decisao.em):"",v.decisao?v.decisao.comentario:"",compraOf(v)||"",v.compra&&v.compra.porId?nameOf(v.compra.porId):"",v.compra&&v.compra.em?brD(v.compra.em):"",v.compra?v.compra.comentario:"",v.feedback?"Enviado":precisaFb(v)?"Pendente":"",v.feedback?brD(v.feedback.em):"",...(v.feedback?[v.feedback.clientes,v.feedback.objetivo,v.feedback.cumprido,v.feedback.atingido,v.feedback.cadastros,v.feedback.cadastrosQuais]:["","","","","",""])]);
   saveCsv("viagens-imbat",cols,rows,msgSel);
 }
 
@@ -647,6 +672,10 @@ async function doAction(id,what,btn){
     patch={pedidoAlteracao:{ida:i,volta:o,motivo:com,porId:S.myId,em:now,status:"Pendente"},historico:hist(`Pediu troca de data: ${fd(i)} a ${fd(o)} (${com})`)}}
   if(what==="recusaralt"&&can("aprovar")&&pedAlt(v)){const com=val("com");if(!com){msgEl.textContent="Explique o motivo para o viajante.";return}
     patch={pedidoAlteracao:{...v.pedidoAlteracao,status:"Recusada",resolvidoPor:S.myId,resolvidoEm:now,resposta:com},historico:hist("Não autorizou a troca de data: "+com)}}
+  if(what==="feedback"&&v.solicitanteId===S.myId&&precisaFb(v)){const fb={clientes:val("fbcli"),objetivo:val("fbobj"),cumprido:val("fbcump"),atingido:val("fbating"),cadastros:val("fbcad"),cadastrosQuais:val("fbcadq")};
+    const miss=[["clientes","os clientes visitados"],["objetivo","o que foi fazer"],["cumprido","o que foi cumprido"],["atingido","se o objetivo foi atingido"],["cadastros","se cadastrou clientes"],...(fb.cadastros==="Sim"?[["cadastrosQuais","quais clientes foram cadastrados"]]:[])].filter(([k])=>!fb[k]).map(x=>x[1]);
+    if(miss.length){msgEl.textContent="Falta preencher "+miss.join(", ")+".";return}
+    patch={feedback:{...fb,porId:S.myId,em:now},historico:hist("Enviou o feedback da viagem")}}
   if(what==="cancelar"&&v.solicitanteId===S.myId){patch={status:"Cancelada pelo solicitante",historico:hist("Cancelou a solicitação")}}
   if(!patch)return;
   btn.disabled=true;
