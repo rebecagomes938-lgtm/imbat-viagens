@@ -19,7 +19,8 @@ const PRESETS={gerente:{solicitar:true},admin:{solicitar:true,aprovar:true,valor
 const PAPEIS={gerente:"Gerente",admin:"Gestora",financeiro:"Financeiro",compras:"Compras",personalizado:"Personalizado"};
 
 const S={sb:null,myId:null,me:null,isOwner:false,perfis:{},viagens:[],loaded:false,
-  tab:null,action:null,draft:{},filter:"Todas",q:"",busy:false,newInvite:null,editInvite:null};
+  tab:null,action:null,draft:{},filter:"Todas",q:"",busy:false,newInvite:null,editInvite:null,
+  mode:null,rotas:[],clientes:[],veiculos:{},cfg:{},rf:null,rfEl:null,ract:null,rdr:{}};
 
 /* Perfis e permissões (o banco confere as mesmas regras) */
 const can=k=>{const m=S.me;return !!(m&&m.ativo&&(m.master||(m.perms&&m.perms[k])))};
@@ -62,7 +63,7 @@ async function loadAll(){
     seesValues()||can("cotar")?S.sb.from("viagens_fin").select("viagem_id,doc").limit(5000):Promise.resolve({data:[]})]);
   if(v.error)throw v.error;
   const fm={};((f&&f.data)||[]).forEach(r=>fm[r.viagem_id]=r.doc);
-  S.viagens=(v.data||[]).map(r=>toTrip(r,fm[r.id]||null));S.loaded=true;render();
+  S.viagens=(v.data||[]).map(r=>toTrip(r,fm[r.id]||null));await loadCarro();S.loaded=true;render();
 }
 let reloadT=null;const scheduleReload=()=>{clearTimeout(reloadT);reloadT=setTimeout(()=>loadAll().catch(()=>{}),400)};
 
@@ -94,11 +95,15 @@ async function enter(uid){
   if(!S.me.ativo){await S.sb.auth.signOut();showLogin("Seu acesso está suspenso. Fale com a administração.");return}
   if(!S.chan){S.chan=S.sb.channel("viagens-imbat").on("postgres_changes",{event:"*",schema:"public",table:"viagens"},scheduleReload)
     .on("postgres_changes",{event:"*",schema:"public",table:"viagens_fin"},scheduleReload)
-    .on("postgres_changes",{event:"*",schema:"public",table:"perfis"},scheduleReload).subscribe();
+    .on("postgres_changes",{event:"*",schema:"public",table:"perfis"},scheduleReload)
+    .on("postgres_changes",{event:"*",schema:"public",table:"rotas"},scheduleReload)
+    .on("postgres_changes",{event:"*",schema:"public",table:"clientes"},scheduleReload)
+    .on("postgres_changes",{event:"*",schema:"public",table:"veiculos"},scheduleReload)
+    .on("postgres_changes",{event:"*",schema:"public",table:"config"},scheduleReload).subscribe();
     setInterval(()=>{if(S.me&&document.visibilityState==="visible")scheduleReload()},60000);
     document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&S.me)scheduleReload()})}
 }
-function showLogin(msg){$("#gate").hidden=true;$("#app").hidden=false;$("#hdr").hidden=true;$("#tabs").hidden=true;novaForm=null;
+function showLogin(msg){$("#gate").hidden=true;$("#app").hidden=false;$("#hdr").hidden=true;$("#tabs").hidden=true;$("#modes").hidden=true;novaForm=null;S.mode=null;S.rf=null;S.rfEl=null;S.ract=null;
   const view=$("#view");view.innerHTML="";view.appendChild(loginScreen(msg))}
 
 function who(){
@@ -124,8 +129,27 @@ function obsAlt(v){const a=alts(v);if(!a.length)return"";const c=altCost(v);cons
     return `${d.join(", ")||"remarcação"} por ${x.origem==="Colaborador"?"pedido do colaborador":String(x.origem).toLowerCase()}${x.motivo?` (${x.motivo})`:""}: ${parts.length?parts.join(" + "):"sem custo"}`}).join("; ");
   return c?`Valor aumentou ${brl(c)}${pct} por ${a.length} alteraç${a.length>1?"ões":"ão"} de data — ${det}.`:`${a.length} alteraç${a.length>1?"ões":"ão"} de data sem custo — ${det}.`}
 
+/* Áreas do sistema: aéreo, carro, relatórios e configurações */
+function modeList(){const m=[];
+  const aerCount=S.viagens.filter(v=>v.solicitanteId===S.myId&&v.status==="Nova data sugerida").length+fbPend().length;
+  if(can("solicitar")||can("aprovar")||can("liberar")||can("valores")||can("cotar"))m.push(["aereo","✈️ Viagens aéreas",can("solicitar")?aerCount:0]);
+  if(can("solicitar")||can("aprovar")||can("relatorio"))m.push(["carro","🚗 Viagens de carro",minhasPend().length]);
+  if(can("relatorio"))m.push(["rel","📊 Relatórios",0]);
+  if(S.isOwner||can("cadastrar"))m.push(["config","⚙️ Configurações",0]);
+  return m}
+function modesBar(modes){const nav=$("#modes");nav.hidden=modes.length<2;
+  nav.innerHTML=modes.map(([k,l,c])=>`<button type="button" data-mode="${k}" aria-pressed="${S.mode===k}">${esc(l)}${c?`<span class="count">${c}</span>`:""}</button>`).join("");
+  nav.querySelectorAll("button").forEach(b=>b.onclick=()=>{if(S.mode===b.dataset.mode)return;S.mode=b.dataset.mode;S.tab=null;S.action=null;S.ract=null;render()})}
 function tabList(){
   const t=[];
+  if(S.mode==="carro"){
+    if(can("solicitar"))t.push(["rnova","Nova rota"],["rminhas","Minhas rotas",minhasPend().length]);
+    if(can("aprovar")||can("relatorio"))t.push(["rtodas","Todas as rotas",S.rotas.filter(rotaPend).length]);
+    return t}
+  if(S.mode==="rel"){if(can("relatorio"))t.push(["rgeral","Geral por gerente"],["rcarro","Carro"],["relatorio","Aéreo"]);return t}
+  if(S.mode==="config"){
+    if(S.isOwner)t.push(["equipe","Equipe e acessos"],["veic","Veículos"],["cli","Clientes"],["comb","Combustível"]);else if(can("cadastrar"))t.push(["equipe","Criar login"]);
+    return t}
   const pend=S.viagens.filter(v=>v.status==="Pendente"||pedAlt(v)).length;
   const mineSug=S.viagens.filter(v=>v.solicitanteId===S.myId&&v.status==="Nova data sugerida").length;
   const lib=S.viagens.filter(v=>compraOf(v)==="Aguardando").length;
@@ -133,9 +157,7 @@ function tabList(){
   if(can("aprovar"))t.push(["decidir","Para decidir",pend],["todas","Todas as viagens"]);
   if(can("liberar"))t.push(["liberar","Escolher cotação",lib]);
   if(can("valores"))t.push(["valores","Valores"]);
-  if(can("relatorio"))t.push(["relatorio","Relatório"]);
   if(can("cotar"))t.push(["cotacoes","Cotações",S.viagens.filter(precisaCotar).length]);
-  if(S.isOwner)t.push(["equipe","Equipe e acessos"]);else if(can("cadastrar"))t.push(["equipe","Criar login"]);
   return t;
 }
 function tabs(list){
@@ -150,7 +172,10 @@ function render(){
   if(!S.loaded||!S.me)return;
   $("#gate").hidden=true;$("#app").hidden=false;$("#hdr").hidden=false;who();
   const view=$("#view");
-  const list=tabList();
+  const modes=modeList();
+  if(!modes.some(m=>m[0]===S.mode))S.mode=modes.length?modes[0][0]:null;
+  modesBar(modes);
+  const list=S.mode?tabList():[];
   if(!list.length){$("#tabs").hidden=true;view.innerHTML=`<div class="gate"><h2>Nenhuma área liberada</h2><p class="hint">Seu cadastro está ativo, mas nenhuma área foi liberada para você ainda. Fale com a administração.</p></div>`;return}
   $("#tabs").hidden=false;tabs(list);
   if(S.tab==="nova"&&fbPend().length){if(novaForm&&novaForm.parentNode)novaForm.remove();const fp=fbPend();
@@ -158,6 +183,14 @@ function render(){
     view.querySelector("#go-fb").onclick=()=>{S.tab="minhas";render()};return}
   if(S.tab==="nova"){if(!novaForm)novaForm=buildNova();if(view.firstChild!==novaForm){view.innerHTML="";view.appendChild(novaForm)}return}
   if(novaForm&&novaForm.parentNode)novaForm.remove();
+  if(S.tab==="rnova")return rnovaView(view);
+  if(S.tab==="rminhas")return rminhasView(view);
+  if(S.tab==="rtodas")return rtodasView(view);
+  if(S.tab==="rcarro")return rcarroView(view);
+  if(S.tab==="rgeral")return rgeralView(view);
+  if(S.tab==="veic")return veicView(view);
+  if(S.tab==="cli")return cliView(view);
+  if(S.tab==="comb")return combView(view);
   if(S.tab==="minhas")return listView(view,S.viagens.filter(v=>v.solicitanteId===S.myId),"Você ainda não registrou viagens","Use a aba Nova viagem para enviar a primeira solicitação. Ela aparece aqui com o andamento da aprovação.");
   if(S.tab==="decidir")return listView(view,S.viagens.filter(v=>v.status==="Pendente"||pedAlt(v)),"Nenhuma viagem aguardando decisão","Novas solicitações e pedidos de troca de data aparecem aqui para você decidir.");
   if(S.tab==="liberar")return listView(view,S.viagens.filter(v=>compraOf(v)==="Aguardando"),"Nenhuma cotação aguardando escolha","Quando uma viagem for aprovada com as 3 cotações, ela aparece aqui para você escolher a opção e liberar a compra.");
@@ -683,6 +716,493 @@ async function doAction(id,what,btn){
   catch(e){btn.disabled=false;
     if(msgEl)msgEl.textContent=errText(e);
     else art.querySelector(".body").insertAdjacentHTML("beforeend",`<p class="msg err">${esc(errText(e))}</p>`)}
+}
+
+
+/* =====================================================================
+   VIAGENS DE CARRO: rotas de visita, check-in, feedback, km e custo
+   ===================================================================== */
+const OBJETIVOS=["Visita comercial","Prospecção","Pós-venda","Entrega / coleta","Cobrança","Outro"];
+const RESULTADOS=[["pedido","Pedido fechado"],["orcamento","Orçamento enviado"],["relac","Relacionamento"],["ausente","Cliente ausente"],["nao","Não visitado"]];
+const resLabel=k=>(RESULTADOS.find(r=>r[0]===k)||[0,k||""])[1];
+const resPill=k=>`<span class="pill ${k==="pedido"?"Aprovada":k==="orcamento"||k==="relac"?"sug":k==="nao"?"Reprovada":"Pendente"}">${esc(resLabel(k))}</span>`;
+const rotaCode=()=>{const d=new Date();const r=Math.random().toString(36).slice(2,5).toUpperCase();return `R-${String(d.getFullYear()).slice(2)}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}-${r}`};
+const rid=()=>Math.random().toString(36).slice(2,10);
+const num=x=>x==null||x===""?null:Number(x);
+const kmF=n=>n==null||isNaN(n)?"—":Number(n).toLocaleString("pt-BR",{maximumFractionDigits:1})+" km";
+const precoComb=()=>{const v=num(S.cfg&&S.cfg.preco_combustivel);return v&&v>0?v:null};
+const paradas=r=>Array.isArray(r.paradas)?r.paradas:[];
+const kmReal=r=>{const a=num(r.km_painel_ini),b=num(r.km_painel_fim);return a!=null&&b!=null&&b>=a?Math.round((b-a)*10)/10:null};
+const kmUsado=r=>kmReal(r)??num(r.km_previsto);
+const custoRota=r=>{const v=r.veiculo;const km=kmUsado(r);const pr=num(r.preco_combustivel);if(!v||!num(v.consumo)||km==null||!pr)return null;return Math.round(km/num(v.consumo)*pr*100)/100};
+const visitou=p=>!!(p.feedback&&p.feedback.resultado!=="nao");
+const ckOk=p=>!!(p.checkin&&!p.checkin.semGps&&(p.checkin.distM==null||p.checkin.distM<=1000));
+const rotaAberta=r=>r.status==="Planejada"||r.status==="Em andamento";
+const rotaPend=r=>rotaAberta(r)&&r.data<today();
+const minhasPend=()=>S.rotas.filter(r=>r.gerente_id===S.myId&&rotaPend(r));
+const cliById=id=>S.clientes.find(c=>c.id===id);
+const cliDisp=c=>c.nome+(c.cidade?" – "+c.cidade:"");
+const cidadeCurta=s=>String(s||"").split(",").map(x=>x.trim()).filter(Boolean).slice(-1)[0]||"";
+
+async function loadCarro(){
+  try{
+    if(!(can("solicitar")||can("aprovar")||can("relatorio"))){S.rotas=[];S.clientes=[];S.veiculos={};S.cfg={};return}
+    const [r,c,ve,cf]=await Promise.all([S.sb.from("rotas").select("*").order("data",{ascending:false}).limit(5000),
+      S.sb.from("clientes").select("*").order("nome").limit(10000),S.sb.from("veiculos").select("*"),S.sb.from("config").select("chave,valor")]);
+    S.rotas=r.data||[];S.clientes=c.data||[];
+    const vm={};(ve.data||[]).forEach(x=>vm[x.gerente_id]=x);S.veiculos=vm;
+    const cm={};(cf.data||[]).forEach(x=>cm[x.chave]=x.valor);S.cfg=cm;
+  }catch(_){S.rotas=S.rotas||[];S.clientes=S.clientes||[]}
+}
+
+/* Mapa: endereço → coordenadas (OpenStreetMap) e distância pelas estradas (OSRM) */
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let lastGeo=0;const GEOK="imbat-geo-cache";const geoMem={};
+try{Object.assign(geoMem,JSON.parse(localStorage.getItem(GEOK)||"{}"))}catch(_){}
+async function geocode(q){
+  const key=normKey(q);if(!key)return null;if(geoMem[key])return geoMem[key];
+  const wait=1100-(Date.now()-lastGeo);if(wait>0)await sleep(wait);lastGeo=Date.now();
+  const r=await fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=1&countrycodes=br&accept-language=pt-BR&q="+encodeURIComponent(q));
+  if(!r.ok)throw new Error("geo");const j=await r.json();if(!j.length)return null;const a=j[0].address||{};
+  const g={lat:+j[0].lat,lng:+j[0].lon,cidade:a.city||a.town||a.village||a.municipality||a.city_district||a.county||""};
+  geoMem[key]=g;try{localStorage.setItem(GEOK,JSON.stringify(geoMem))}catch(_){}
+  return g;
+}
+const hav=(a,b)=>{const t=x=>x*Math.PI/180;const dLa=t(b.lat-a.lat),dLo=t(b.lng-a.lng);const h=Math.sin(dLa/2)**2+Math.cos(t(a.lat))*Math.cos(t(b.lat))*Math.sin(dLo/2)**2;return 2*6371*Math.asin(Math.sqrt(h))};
+async function rotaKm(pts){
+  try{const c=pts.map(p=>`${(+p.lng).toFixed(6)},${(+p.lat).toFixed(6)}`).join(";");
+    const r=await fetch(`https://router.project-osrm.org/route/v1/driving/${c}?overview=false`);const j=await r.json();
+    if(j.code!=="Ok")throw 0;return {legs:j.routes[0].legs.map(l=>Math.round(l.distance/100)/10),estimado:false}}
+  catch(_){const legs=[];for(let i=1;i<pts.length;i++)legs.push(Math.round(hav(pts[i-1],pts[i])*1.3*10)/10);return {legs,estimado:true}}
+}
+const somaKm=a=>Math.round(a.reduce((s,x)=>s+(x||0),0)*10)/10;
+const mapsLink=(lat,lng)=>`https://www.google.com/maps?q=${lat},${lng}`;
+
+/* ---------- Nova rota ---------- */
+const novaParada=()=>({nome:"",endereco:"",objetivo:OBJETIVOS[0],clienteId:null});
+const LASTO="imbat-ultima-saida";
+function rfReset(){let o="";try{o=localStorage.getItem(LASTO)||""}catch(_){}
+  S.rf={data:today(),origem:o,kmIni:"",volta:true,paradas:[novaParada()],calc:null}}
+const rfKey=F=>JSON.stringify([normKey(F.origem),F.paradas.map(p=>[p.clienteId,normKey(p.endereco)]),F.volta]);
+function veicTxt(v){if(!v)return"";return `${v.modelo} · ${String(v.placa||"").toUpperCase()}${v.cor?" · "+v.cor:""} · ${String(v.consumo_km_l??v.consumo).replace(".",",")} km/l`}
+
+function rnovaView(view){
+  if(minhasPend().length){const p=minhasPend();
+    view.innerHTML=`<div class="empty"><b>Encerre a rota anterior</b><span>Antes de cadastrar uma nova rota, registre o feedback das visitas e encerre ${p.length>1?"as rotas":"a rota"} de ${p.map(r=>fd(r.data)).join(", ")}.</span><div class="actions"><button class="btn primary" type="button" id="go-rp">Ir para Minhas rotas</button></div></div>`;
+    view.querySelector("#go-rp").onclick=()=>{S.tab="rminhas";render()};return}
+  if(!S.rf)rfReset();
+  if(!S.rfEl){S.rfEl=document.createElement("form");S.rfEl.className="panel";S.rfEl.noValidate=true;drawRf()}
+  if(view.firstChild!==S.rfEl){view.innerHTML="";view.appendChild(S.rfEl)}
+}
+function drawRf(){
+  const f=S.rfEl,F=S.rf;const v=S.veiculos[S.myId];
+  f.innerHTML=`<div><h2>Nova rota de visitas</h2><p class="hint">Informe de onde você sai e os clientes na ordem em que vai visitar. O sistema calcula os km pelo mapa. Não precisa de aprovação: depois de salvar, é só seguir.</p></div>
+  ${v?`<div class="note dec"><span>🚗 <b>Seu veículo:</b> ${esc(veicTxt(v))}</span></div>`:`<div class="note sug"><span><b>Seu veículo ainda não foi cadastrado.</b> A rota é salva normalmente, mas sem o custo de combustível. Peça à administração para cadastrar.</span></div>`}
+  <div class="grid">
+    <label class="f">Data da rota<input type="date" id="rf-data" value="${esc(F.data)}"></label>
+    <label class="f">Km do painel na saída <small>opcional</small><input id="rf-kmini" inputmode="decimal" value="${esc(F.kmIni)}" placeholder="Ex.: 45210"></label>
+    <label class="f full">Saindo de <small>endereço com número e cidade</small><input id="rf-origem" value="${esc(F.origem)}" placeholder="Ex.: Rua das Flores, 100, Belo Horizonte"></label>
+  </div>
+  <div class="sted-list">${F.paradas.map((p,i)=>stedHtml(p,i,F.paradas.length)).join("")}</div>
+  <div class="actions"><button class="btn sug" type="button" id="rf-add">+ Adicionar cliente</button></div>
+  <label class="switch"><input type="checkbox" id="rf-volta" ${F.volta?"checked":""}> Voltar para o ponto de saída no fim do dia</label>
+  <div id="rf-calc">${calcHtml(F)}</div>
+  <div class="actions"><button class="btn" type="button" id="rf-km">Calcular km</button><button class="btn primary" type="submit" id="rf-save">Salvar rota</button><p class="msg" id="rf-msg" role="status"></p></div>
+  <datalist id="dl-cli">${S.clientes.map(c=>`<option value="${esc(cliDisp(c))}"></option>`).join("")}</datalist>`;
+  wireRf();
+}
+function stedHtml(p,i,n){
+  const c=p.clienteId?cliById(p.clienteId):null;
+  return `<div class="sted" data-i="${i}"><div class="sted-h"><span class="stopn">${i+1}</span><b style="flex:1">Cliente ${i+1}</b>
+    ${i>0?`<button class="btn ghost" type="button" data-m="up" aria-label="Subir">↑</button>`:""}${i<n-1?`<button class="btn ghost" type="button" data-m="down" aria-label="Descer">↓</button>`:""}${n>1?`<button class="btn ghost" type="button" data-m="del">Remover</button>`:""}</div>
+    <div class="grid"><label class="f">Cliente<input list="dl-cli" data-k="nome" value="${esc(c?cliDisp(c):p.nome)}" placeholder="Digite para buscar ou cadastrar" autocomplete="off"></label>
+    <label class="f">Objetivo<select data-k="objetivo">${OBJETIVOS.map(o=>`<option ${p.objetivo===o?"selected":""}>${o}</option>`).join("")}</select></label>
+    <label class="f full">Endereço do cliente<input data-k="endereco" value="${esc(p.endereco)}" ${c?"readonly":""} placeholder="Rua, número, bairro, cidade"></label></div>
+    ${c?`<span class="sub">✔ Cliente já cadastrado</span>`:p.nome?`<span class="sub">Cliente novo: será cadastrado ao salvar a rota</span>`:""}</div>`;
+}
+function calcHtml(F){
+  const c=F.calc;if(!c||c.key!==rfKey(F))return"";
+  const v=S.veiculos[S.myId];const pr=precoComb();
+  const nomes=["Saída",...F.paradas.map(p=>p.nome||"Cliente"),...(F.volta?["Volta à saída"]:[])];
+  const custo=v&&pr?Math.round(c.total/num(v.consumo_km_l)*pr*100)/100:null;
+  return `<div class="note dec"><strong>Percurso calculado${c.estimado?" (aproximado)":""}</strong>
+    ${c.legs.map((km,i)=>`<span>${esc(nomes[i])} → ${esc(nomes[i+1])}: <b>${kmF(km)}</b></span>`).join("")}
+    <span style="font-size:16px">Total previsto: <b>${kmF(c.total)}</b>${custo!=null?` · combustível estimado <b>${brl(custo)}</b>`:""}</span>
+    ${c.estimado?`<span class="sub">O serviço de rotas não respondeu; a distância foi estimada em linha reta com margem de 30%.</span>`:""}</div>`;
+}
+function wireRf(){
+  const f=S.rfEl,F=S.rf;
+  const bind=(id,k,ev="input")=>{const el=f.querySelector(id);el.addEventListener(ev,()=>{F[k]=el.type==="checkbox"?el.checked:el.value;if(k==="volta")redrawCalc()})};
+  bind("#rf-data","data");bind("#rf-kmini","kmIni");bind("#rf-origem","origem");bind("#rf-volta","volta","change");
+  f.querySelectorAll(".sted").forEach(box=>{const i=+box.dataset.i;const p=F.paradas[i];
+    box.querySelectorAll("[data-k]").forEach(el=>{
+      el.addEventListener("input",()=>{p[el.dataset.k]=el.value});
+      if(el.dataset.k==="nome")el.addEventListener("change",()=>{
+        const t=normKey(el.value);const m=S.clientes.find(c=>normKey(cliDisp(c))===t)||S.clientes.find(c=>normKey(c.nome)===t&&S.clientes.filter(x=>normKey(x.nome)===t).length===1);
+        if(m){if(p.clienteId===m.id)return;p.clienteId=m.id;p.nome=m.nome;p.endereco=m.endereco;drawRf();return}
+        p.nome=el.value.trim();if(p.clienteId){p.clienteId=null;p.endereco="";drawRf()}})});
+    box.querySelectorAll("[data-m]").forEach(b=>b.onclick=()=>{const m=b.dataset.m;
+      if(m==="del")F.paradas.splice(i,1);
+      if(m==="up"&&i>0)[F.paradas[i-1],F.paradas[i]]=[F.paradas[i],F.paradas[i-1]];
+      if(m==="down"&&i<F.paradas.length-1)[F.paradas[i+1],F.paradas[i]]=[F.paradas[i],F.paradas[i+1]];
+      drawRf()})});
+  f.querySelector("#rf-add").onclick=()=>{F.paradas.push(novaParada());drawRf();const ins=f.querySelectorAll('.sted [data-k="nome"]');ins[ins.length-1].focus()};
+  f.querySelector("#rf-km").onclick=()=>rfCalc().catch(()=>{});
+  f.onsubmit=e=>{e.preventDefault();rfSave()};
+}
+function redrawCalc(){const el=S.rfEl&&S.rfEl.querySelector("#rf-calc");if(el)el.innerHTML=calcHtml(S.rf)}
+function rfMsg(t,cls){const m=S.rfEl.querySelector("#rf-msg");m.className="msg "+(cls||"err");m.textContent=t}
+async function rfCalc(){
+  const F=S.rf;
+  if(!F.origem.trim()){rfMsg("Informe de onde você sai.");return false}
+  const miss=F.paradas.map((p,i)=>(!p.nome.trim()||!p.endereco.trim())?i+1:null).filter(Boolean);
+  if(miss.length){rfMsg(`Preencha o nome e o endereço do cliente ${miss.join(", ")}.`);return false}
+  const btn=S.rfEl.querySelector("#rf-km");btn.disabled=true;rfMsg("Localizando os endereços no mapa…","");
+  try{
+    const o=await geocode(F.origem);if(!o){rfMsg("Não encontrei no mapa o endereço de saída. Confira rua, número e cidade.");return false}
+    const par=[],nf=[];
+    for(const p of F.paradas){let g=null;const c=p.clienteId?cliById(p.clienteId):null;
+      if(c&&c.lat!=null)g={lat:c.lat,lng:c.lng,cidade:c.cidade||""};else g=await geocode(p.endereco);
+      if(!g)nf.push(p.nome);par.push(g)}
+    if(nf.length){rfMsg(`Não encontrei no mapa: ${nf.join(", ")}. Confira o endereço (rua, número e cidade).`);return false}
+    rfMsg("Calculando a distância pelas estradas…","");
+    const pts=[o,...par,...(F.volta?[o]:[])];const k=await rotaKm(pts);
+    F.calc={key:rfKey(F),o,par,legs:k.legs,total:somaKm(k.legs),estimado:k.estimado};
+    redrawCalc();rfMsg("","");return true}
+  catch(_){rfMsg("Não consegui acessar o mapa agora. Verifique a internet e tente de novo.");return false}
+  finally{btn.disabled=false}
+}
+async function rfSave(){
+  if(S.busy)return;const F=S.rf;
+  if(minhasPend().length){rfMsg("Encerre primeiro a rota anterior, em Minhas rotas.");return}
+  if(!F.data){rfMsg("Informe a data da rota.");return}
+  const kmIni=parseBR(F.kmIni);if(Number.isNaN(kmIni)){rfMsg("Digite o km do painel só com números.");return}
+  if(!F.calc||F.calc.key!==rfKey(F)){if(!(await rfCalc()))return}
+  const C=F.calc;S.busy=true;const btn=S.rfEl.querySelector("#rf-save");btn.disabled=true;rfMsg("Salvando…","");
+  try{
+    const ps=[];
+    for(let i=0;i<F.paradas.length;i++){const p=F.paradas[i],g=C.par[i];let cid=p.clienteId;
+      if(!cid){const ex=S.clientes.find(c=>normKey(c.nome)===normKey(p.nome)&&normKey(c.endereco)===normKey(p.endereco));
+        if(ex)cid=ex.id;else{const {data,error}=await S.sb.from("clientes").insert({nome:p.nome.trim(),endereco:p.endereco.trim(),cidade:g.cidade||cidadeCurta(p.endereco),lat:g.lat,lng:g.lng,criado_por:S.myId}).select("id").single();
+          if(error)throw dbErr(error);cid=data.id;S.clientes.push({id:cid,nome:p.nome.trim(),endereco:p.endereco.trim(),cidade:g.cidade,lat:g.lat,lng:g.lng})}}
+      const c=cliById(cid)||{};
+      ps.push({id:rid(),clienteId:cid,nome:c.nome||p.nome.trim(),endereco:c.endereco||p.endereco.trim(),cidade:c.cidade||g.cidade||"",lat:g.lat,lng:g.lng,objetivo:p.objetivo,kmTrecho:C.legs[i]})}
+    const v=S.veiculos[S.myId];const now=new Date().toISOString();
+    const {error}=await S.sb.from("rotas").insert({codigo:rotaCode(),gerente_id:S.myId,data:F.data,status:"Planejada",origem:F.origem.trim(),origem_lat:C.o.lat,origem_lng:C.o.lng,
+      volta_origem:F.volta,paradas:ps,km_previsto:C.total,km_painel_ini:kmIni,
+      veiculo:v?{modelo:v.modelo,placa:v.placa,cor:v.cor,consumo:num(v.consumo_km_l),locadora:v.locadora}:null,preco_combustivel:precoComb(),
+      doc:{kmEstimado:C.estimado,kmVolta:F.volta?C.legs[C.legs.length-1]:null,historico:[{em:now,porId:S.myId,acao:`Cadastrou a rota com ${ps.length} cliente${ps.length>1?"s":""} (${kmF(C.total)})`}]}});
+    if(error)throw dbErr(error);
+    try{localStorage.setItem(LASTO,F.origem.trim())}catch(_){}
+    rfReset();S.rfEl=null;S.tab="rminhas";await loadAll()}
+  catch(e){rfMsg(errText(e))}
+  finally{S.busy=false;if(S.rfEl){const b=S.rfEl.querySelector("#rf-save");if(b)b.disabled=false}}
+}
+
+/* ---------- Cartão da rota ---------- */
+function rStatusPill(r){if(rotaPend(r))return `<span class="pill Pendente">Encerramento pendente</span>`;
+  const m={"Planejada":"neutral","Em andamento":"sug","Concluída":"Aprovada","Cancelada":"Reprovada"};return `<span class="pill ${m[r.status]||"neutral"}">${esc(r.status)}</span>`}
+function distTxt(ck){
+  if(ck.semGps)return `<span class="up">sem localização (GPS indisponível)</span>`;
+  if(ck.distM==null)return "local salvo como endereço do cliente";
+  if(ck.distM<=1000)return `no local do cliente (a ${ck.distM<1000?Math.round(ck.distM)+" m":"1 km"})`;
+  return `<span class="up">a ${kmF(Math.round(ck.distM/100)/10)} do endereço do cliente</span>`;
+}
+function stopHtml(r,p,i,mine,open,A,dr){
+  const ck=p.checkin,fb=p.feedback;const me=A&&A.p===p.id?A.kind:null;
+  let h=`<div class="stop"><div class="stop-h"><span class="stopn">${i+1}</span><div style="min-width:0;flex:1"><b>${esc(p.nome)}</b>
+    <div class="sub">${esc(p.cidade||"")}${p.objetivo?" · "+esc(p.objetivo):""}${p.kmTrecho!=null?" · "+kmF(p.kmTrecho)+" do ponto anterior":""}</div><div class="sub">${esc(p.endereco)}</div></div>
+    ${fb?resPill(fb.resultado):ck?`<span class="pill sug">No cliente</span>`:`<span class="pill neutral">A visitar</span>`}</div>`;
+  if(ck)h+=`<div class="sub">📍 Check-in ${esc(fdt(ck.em))} · ${distTxt(ck)}${ck.lat!=null?` · <a href="${mapsLink(ck.lat,ck.lng)}" target="_blank" rel="noopener">ver no mapa</a>`:""}</div>`;
+  if(fb)h+=`<div class="note dec"><span><b>${esc(resLabel(fb.resultado))}</b>${fb.valor?` · pedido de <b>${brl(fb.valor)}</b>`:""} · ${esc(fdt(fb.em))}</span>${fb.obs?`<span>${esc(fb.obs)}</span>`:""}${fb.proximo?`<span><b>Próximo passo:</b> ${esc(fb.proximo)}</span>`:""}</div>`;
+  if(mine&&open&&!fb){
+    if(me==="fb"){const res=dr.res||"";
+      h+=`<div class="inline-form"><strong>Como foi a visita?</strong><div class="seg big">${RESULTADOS.filter(x=>x[0]!=="nao").map(([k,l])=>`<label><input type="radio" name="ro-res-${r.id}" data-dk="res" value="${k}" ${res===k?"checked":""}> ${l}</label>`).join("")}</div>
+      <label class="f">Valor do pedido (R$) <small>só se fechou pedido</small><input data-dk="val" inputmode="decimal" value="${esc(dr.val||"")}" placeholder="Ex.: 3.500,00"></label>
+      <label class="f">O que aconteceu na visita?<textarea data-dk="obs" placeholder="Ex.: apresentei a linha de luvas, pediram amostra">${esc(dr.obs||"")}</textarea></label>
+      <label class="f">Próximo passo <small>opcional</small><input data-dk="prox" value="${esc(dr.prox||"")}" placeholder="Ex.: retornar em 15 dias com a proposta"></label>
+      <div class="actions"><button class="btn primary" type="button" data-ro="fb" data-p="${p.id}">Salvar feedback</button><button class="btn ghost" type="button" data-ro="close">Voltar</button><p class="msg err" data-smsg></p></div></div>`}
+    else if(me==="nao")h+=`<div class="inline-form"><label class="f">Por que não visitou?<textarea data-dk="obs" placeholder="Ex.: cliente remarcou para semana que vem">${esc(dr.obs||"")}</textarea></label><div class="actions"><button class="btn no" type="button" data-ro="nao" data-p="${p.id}">Confirmar: não visitado</button><button class="btn ghost" type="button" data-ro="close">Voltar</button><p class="msg err" data-smsg></p></div></div>`;
+    else if(me==="gpserr")h+=`<div class="inline-form"><p class="msg err" style="margin:0">${esc(A.err||"Não foi possível obter sua localização.")}</p><p class="hint" style="margin:0">Confira se a localização do celular está ligada e se o navegador tem permissão. Você pode tentar de novo ou seguir sem localização (fica marcado no relatório).</p><div class="actions"><button class="btn primary" type="button" data-ro="checkin" data-p="${p.id}">Tentar de novo</button><button class="btn" type="button" data-ro="semgps" data-p="${p.id}">Seguir sem localização</button><button class="btn ghost" type="button" data-ro="close">Voltar</button></div></div>`;
+    else if(!A){
+      if(!ck)h+=`<div class="actions"><button class="btn primary xl" type="button" data-ro="checkin" data-p="${p.id}">📍 Cheguei no cliente</button><button class="btn ghost" type="button" data-ro="open-nao" data-p="${p.id}">Não consegui visitar</button></div><p class="hint" style="margin:0">Ao tocar em "Cheguei", o sistema registra a sua localização só neste momento.</p>`;
+      else h+=`<div class="actions"><button class="btn ok xl" type="button" data-ro="open-fb" data-p="${p.id}">Registrar como foi a visita</button></div>`}
+  }
+  return h+`<p class="msg err" data-smsg="${p.id}"></p></div>`;
+}
+function rcard(r){
+  const mine=r.gerente_id===S.myId;const open=rotaAberta(r);
+  const A=S.ract&&S.ract.id===r.id?S.ract:null;const dr=S.rdr[r.id]||{};
+  const ps=paradas(r);const cid=[...new Set(ps.map(p=>p.cidade).filter(Boolean))];
+  const vis=ps.filter(visitou).length,res=ps.filter(p=>p.feedback).length;const custo=custoRota(r);const kr=kmReal(r);
+  const hist=((r.doc&&r.doc.historico)||[]).slice().reverse();
+  let h=`<article class="trip rota" data-id="${esc(r.id)}"><div class="head"><div style="min-width:0"><div class="code">${esc(r.codigo)} · ${esc(nameOf(r.gerente_id))}</div>
+    <p class="route">${esc(cidadeCurta(r.origem)||r.origem)}<span class="arr" aria-hidden="true">→</span>${esc(cid.join(", ")||"—")}${r.volta_origem?`<span class="arr" aria-hidden="true">→</span>volta`:""}</p></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">${rStatusPill(r)}</div></div>
+  <div class="dates"><div><span class="k">Data</span><span class="v">${fd(r.data)}</span></div>
+    <div><span class="k">Visitas</span><span class="v">${vis} de ${ps.length}</span></div>
+    <div><span class="k">Km previsto</span><span class="v">${kmF(num(r.km_previsto))}</span></div>
+    ${kr!=null?`<div><span class="k">Km do painel</span><span class="v">${kmF(kr)}</span></div>`:""}
+    <div><span class="k">Combustível</span><span class="v">${custo!=null?brl(custo):"—"}</span></div></div>
+  <hr class="perf"><div class="body">
+  <div class="meta"><div><span class="k">Saída</span>${esc(r.origem)}</div><div><span class="k">Veículo</span>${r.veiculo?esc(veicTxt(r.veiculo)):"Não cadastrado"}</div>
+  ${kr!=null&&num(r.km_previsto)&&Math.abs(kr-num(r.km_previsto))>Math.max(20,num(r.km_previsto)*.25)?`<div style="grid-column:1/-1"><span class="up"><b>Atenção:</b> km do painel (${kmF(kr)}) diferente do previsto (${kmF(num(r.km_previsto))}).</span></div>`:""}</div>
+  <div class="stops">${ps.map((p,i)=>stopHtml(r,p,i,mine,open,A,dr)).join("")}</div>`;
+  if(r.status==="Concluída"&&r.doc&&r.doc.encerramento){const e=r.doc.encerramento;h+=`<div class="note dec"><span><b>Rota encerrada</b> em ${esc(fdt(e.em))}</span>${e.obs?`<span>${esc(e.obs)}</span>`:""}</div>`}
+  if(r.status==="Cancelada"&&r.doc&&r.doc.cancelamento)h+=`<div class="note dec"><span><b>Rota cancelada</b> em ${esc(fdt(r.doc.cancelamento.em))}</span><span>${esc(r.doc.cancelamento.motivo||"")}</span></div>`;
+  if(!mine&&rotaPend(r))h+=`<div class="note sug"><strong>Encerramento pendente</strong><span>A rota foi em ${esc(fd(r.data))} e ${esc(nameOf(r.gerente_id))} ainda não registrou todos os feedbacks.</span></div>`;
+  if(mine&&open){
+    if(!A)h+=`<div class="actions"><button class="btn sug" type="button" data-ro="open-add">+ Adicionar visita</button><button class="btn ok" type="button" data-ro="open-fim">Encerrar rota</button>${ps.some(p=>p.checkin||p.feedback)?"":`<button class="btn ghost" type="button" data-ro="open-cancel">Cancelar rota</button>`}</div>`;
+    if(A&&A.kind==="add")h+=`<div class="inline-form"><strong>Nova visita nesta rota</strong><div class="grid"><label class="f">Cliente<input list="dl-cli2" data-dk="anome" value="${esc(dr.anome||"")}" placeholder="Digite para buscar ou cadastrar" autocomplete="off"></label><label class="f">Objetivo<select data-dk="aobj">${OBJETIVOS.map(o=>`<option ${dr.aobj===o?"selected":""}>${o}</option>`).join("")}</select></label><label class="f full">Endereço <small>se for cliente novo</small><input data-dk="aend" value="${esc(dr.aend||"")}" placeholder="Rua, número, bairro, cidade"></label></div><datalist id="dl-cli2">${S.clientes.map(c=>`<option value="${esc(cliDisp(c))}"></option>`).join("")}</datalist><div class="actions"><button class="btn primary" type="button" data-ro="add">Adicionar e recalcular km</button><button class="btn ghost" type="button" data-ro="close">Cancelar</button><p class="msg err" data-smsg></p></div></div>`;
+    if(A&&A.kind==="fim"){const falt=ps.filter(p=>!p.feedback);
+      h+=falt.length?`<div class="inline-form"><p class="msg err" style="margin:0">Falta registrar como foi a visita em: ${esc(falt.map(p=>p.nome).join(", "))}.</p><div class="actions"><button class="btn ghost" type="button" data-ro="close">Voltar</button></div></div>`
+      :`<div class="inline-form"><strong>Encerrar a rota</strong><div class="grid">${num(r.km_painel_ini)==null?`<label class="f">Km do painel na saída <small>opcional</small><input data-dk="kini" inputmode="decimal" value="${esc(dr.kini||"")}"></label>`:`<div class="f"><span class="sub">Km do painel na saída</span><b>${esc(String(r.km_painel_ini))}</b></div>`}<label class="f">Km do painel na chegada <small>opcional</small><input data-dk="kfim" inputmode="decimal" value="${esc(dr.kfim||"")}"></label><label class="f full">Observação do dia <small>opcional</small><textarea data-dk="obs">${esc(dr.obs||"")}</textarea></label></div><div class="actions"><button class="btn ok" type="button" data-ro="fim">Encerrar rota</button><button class="btn ghost" type="button" data-ro="close">Voltar</button><p class="msg err" data-smsg></p></div></div>`}
+    if(A&&A.kind==="cancel")h+=`<div class="inline-form"><label class="f">Por que a rota foi cancelada?<textarea data-dk="obs">${esc(dr.obs||"")}</textarea></label><div class="actions"><button class="btn no" type="button" data-ro="cancel">Confirmar cancelamento</button><button class="btn ghost" type="button" data-ro="close">Voltar</button><p class="msg err" data-smsg></p></div></div>`;
+  }
+  h+=`<details class="hist"><summary>Histórico (${hist.length})</summary><ol>${hist.map(x=>`<li>${esc(fdt(x.em))} · ${esc(nameOf(x.porId))}: ${esc(x.acao)}</li>`).join("")}</ol></details></div></article>`;
+  return h;
+}
+const sortRotas=a=>a.slice().sort((x,y)=>(y.data||"").localeCompare(x.data||"")||(y.criado_em||"").localeCompare(x.criado_em||""));
+function wireRotas(view){
+  view.querySelectorAll(".rota [data-dk]").forEach(inp=>{const ev=inp.type==="radio"?"change":"input";inp.addEventListener(ev,()=>{
+    const id=inp.closest(".rota").dataset.id;S.rdr[id]=S.rdr[id]||{};if(inp.type!=="radio"||inp.checked)S.rdr[id][inp.dataset.dk]=inp.value})});
+  view.querySelectorAll(".rota [data-ro]").forEach(b=>b.onclick=()=>rotaAction(b.closest(".rota").dataset.id,b.dataset.ro,b));
+}
+async function saveRota(r,cols,acao,docExtra){
+  const now=new Date().toISOString();
+  const doc={...(r.doc||{}),...(docExtra||{}),historico:[...((r.doc&&r.doc.historico)||[]),{em:now,porId:S.myId,acao}]};
+  const {data,error}=await S.sb.from("rotas").update({...cols,doc}).eq("id",r.id).select("id");
+  if(error)throw dbErr(error);if(!data||!data.length)throw {code:"perm"};
+  await loadAll();
+}
+const getPos=()=>new Promise((ok,no)=>{if(!navigator.geolocation)return no({code:0});navigator.geolocation.getCurrentPosition(ok,no,{enableHighAccuracy:true,timeout:20000,maximumAge:0})});
+async function rotaAction(id,what,btn){
+  const r=S.rotas.find(x=>x.id===id);if(!r)return;
+  const pid=btn.dataset.p;
+  if(what.startsWith("open-")){S.ract={id,kind:what.slice(5),p:pid};render();return}
+  if(what==="close"){S.ract=null;delete S.rdr[id];render();return}
+  if(r.gerente_id!==S.myId||!rotaAberta(r))return;
+  const art=btn.closest(".rota");const msgEl=(btn.closest(".inline-form")&&btn.closest(".inline-form").querySelector("[data-smsg]"))||art.querySelector(pid?`[data-smsg="${pid}"]`:"[data-smsg]");
+  const say=t=>{if(msgEl)msgEl.textContent=t};
+  const g=k=>{const el=art.querySelector(`[data-dk="${k}"]${k==="res"?":checked":""}`);return el?el.value.trim():""};
+  const ps=paradas(r);const p=ps.find(x=>x.id===pid);const now=new Date().toISOString();
+  const setP=ch=>ps.map(x=>x.id===pid?{...x,...ch}:x);
+  const st=r.status==="Planejada"?{status:"Em andamento"}:{};
+  const done=async(cols,acao,extra)=>{btn.disabled=true;try{await saveRota(r,cols,acao,extra);S.ract=null;delete S.rdr[id];render()}catch(e){btn.disabled=false;say(errText(e))}};
+  if(what==="checkin"&&p){btn.disabled=true;const old=btn.textContent;btn.textContent="Obtendo localização…";
+    try{const pos=await getPos();const c={lat:pos.coords.latitude,lng:pos.coords.longitude};
+      const distM=p.lat!=null?Math.round(hav(c,{lat:p.lat,lng:p.lng})*1000):null;
+      const ck={em:new Date().toISOString(),lat:c.lat,lng:c.lng,precisao:Math.round(pos.coords.accuracy||0),distM};
+      if(p.lat==null&&p.clienteId){const cl=cliById(p.clienteId);if(cl&&cl.lat==null)await S.sb.from("clientes").update({lat:c.lat,lng:c.lng}).eq("id",cl.id)}
+      S.ract={id,kind:"fb",p:pid};
+      await saveRota(r,{paradas:setP({checkin:ck,...(p.lat==null?{lat:c.lat,lng:c.lng}:{})}),...st},`Check-in em ${p.nome}${distM!=null?` (a ${distM} m do endereço)`:""}`);
+      render()}
+    catch(e){btn.disabled=false;btn.textContent=old;
+      const m=e&&e.code===1?"Permissão de localização negada.":e&&e.code===3?"O GPS demorou para responder.":e&&e.code===2?"Localização indisponível no momento.":e&&e.code===0?"Este aparelho não informa a localização.":errText(e);
+      S.ract={id,kind:"gpserr",p:pid,err:m};render()}
+    return}
+  if(what==="semgps"&&p)return done({paradas:setP({checkin:{em:now,semGps:true,erro:S.ract&&S.ract.err||""}}),...st},`Chegada em ${p.nome} sem localização`).then(()=>{S.ract={id,kind:"fb",p:pid};render()});
+  if(what==="fb"&&p){const res=g("res"),obs=g("obs"),prox=g("prox");const val=parseBR(g("val"));
+    if(!res){say("Escolha como foi a visita.");return}
+    if(Number.isNaN(val)){say("Digite o valor só com números, por exemplo 3.500,00.");return}
+    if(res==="pedido"&&!val){say("Informe o valor do pedido fechado.");return}
+    if(!obs){say("Conte rapidamente o que aconteceu na visita.");return}
+    return done({paradas:setP({feedback:{resultado:res,valor:res==="pedido"?val:null,obs,proximo:prox,em:now}}),...st},`Feedback de ${p.nome}: ${resLabel(res)}${res==="pedido"?` (${brl(val)})`:""}`)}
+  if(what==="nao"&&p){const obs=g("obs");if(!obs){say("Explique por que não visitou.");return}
+    return done({paradas:setP({feedback:{resultado:"nao",obs,em:now}})},`${p.nome}: não visitado (${obs})`)}
+  if(what==="add"){const t=normKey(g("anome"));const obj=g("aobj")||OBJETIVOS[0];let end=g("aend");
+    if(!t){say("Informe o cliente.");return}
+    const m=S.clientes.find(c=>normKey(cliDisp(c))===t)||S.clientes.find(c=>normKey(c.nome)===t);
+    if(!m&&!end){say("Cliente novo: informe o endereço.");return}
+    btn.disabled=true;say("Localizando no mapa…");
+    try{let cl=m,gp=null;
+      if(m&&m.lat!=null)gp={lat:m.lat,lng:m.lng,cidade:m.cidade};else{gp=await geocode(m?m.endereco:end);if(!gp){btn.disabled=false;say("Não encontrei esse endereço no mapa. Confira rua, número e cidade.");return}}
+      if(!cl){const nome=g("anome");const {data,error}=await S.sb.from("clientes").insert({nome,endereco:end,cidade:gp.cidade||cidadeCurta(end),lat:gp.lat,lng:gp.lng,criado_por:S.myId}).select("*").single();if(error)throw dbErr(error);cl=data}
+      const np=[...ps,{id:rid(),clienteId:cl.id,nome:cl.nome,endereco:cl.endereco,cidade:cl.cidade||gp.cidade||"",lat:gp.lat,lng:gp.lng,objetivo:obj}];
+      const o={lat:r.origem_lat,lng:r.origem_lng};const pts=[o,...np.map(x=>({lat:x.lat,lng:x.lng})),...(r.volta_origem?[o]:[])];
+      say("Recalculando os km…");const k=await rotaKm(pts);np.forEach((x,i)=>x.kmTrecho=k.legs[i]);
+      await saveRota(r,{paradas:np,km_previsto:somaKm(k.legs)},`Adicionou a visita ${cl.nome} (novo total ${kmF(somaKm(k.legs))})`,{kmEstimado:k.estimado||!!(r.doc&&r.doc.kmEstimado),kmVolta:r.volta_origem?k.legs[k.legs.length-1]:null});
+      S.ract=null;delete S.rdr[id];render()}
+    catch(e){btn.disabled=false;say(errText(e))}
+    return}
+  if(what==="fim"){if(ps.some(x=>!x.feedback)){say("Registre o feedback de todas as visitas antes de encerrar.");return}
+    const ki=num(r.km_painel_ini)!=null?num(r.km_painel_ini):parseBR(g("kini")),kf=parseBR(g("kfim"));
+    if(Number.isNaN(ki)||Number.isNaN(kf)){say("Digite o km do painel só com números.");return}
+    if(ki!=null&&kf!=null&&kf<ki){say("O km da chegada é menor que o da saída.");return}
+    const kr=ki!=null&&kf!=null?kf-ki:null;
+    return done({status:"Concluída",km_painel_ini:ki,km_painel_fim:kf},`Encerrou a rota${kr!=null?` (painel: ${kmF(kr)})`:""}`,{encerramento:{em:now,obs:g("obs")}})}
+  if(what==="cancel"){const obs=g("obs");if(!obs){say("Explique o motivo do cancelamento.");return}
+    return done({status:"Cancelada"},"Cancelou a rota: "+obs,{cancelamento:{em:now,motivo:obs}})}
+}
+
+function rminhasView(view){
+  const arr=sortRotas(S.rotas.filter(r=>r.gerente_id===S.myId));const pend=minhasPend();
+  view.innerHTML=`${pend.length?`<div class="note sug" style="margin-bottom:12px"><strong>Rota${pend.length>1?"s":""} para encerrar</strong><span>Registre como foram as visitas e encerre a rota de ${pend.map(r=>esc(fd(r.data))).join(", ")}. Só depois dá para cadastrar uma rota nova.</span></div>`:""}
+  ${arr.length?`<div class="list">${arr.map(rcard).join("")}</div>`:`<div class="empty"><b>Você ainda não cadastrou rotas</b><span>Use a aba Nova rota para planejar as visitas do dia. Ela aparece aqui para você fazer o check-in em cada cliente.</span></div>`}`;
+  wireRotas(view);
+}
+
+/* ---------- Filtros de período (mesmos do relatório aéreo) ---------- */
+function newPer(){const n=new Date();return {modo:"mes",ano:String(n.getFullYear()),mes:String(n.getMonth()+1).padStart(2,"0"),de:"",ate:"",ger:"",sel:""}}
+const inPer=(d,R)=>{d=d||"";if(R.modo==="mes")return d.startsWith(R.ano+"-"+R.mes);if(R.modo==="ano")return d.startsWith(R.ano);return (!R.de||d>=R.de)&&(!R.ate||d<=R.ate)};
+const perLabel=R=>R.modo==="mes"?`${MESES_L[+R.mes-1]} de ${R.ano}`:R.modo==="ano"?`Ano de ${R.ano}`:(R.de||R.ate)?`${R.de?brD(R.de):"início"} a ${R.ate?brD(R.ate):"hoje"}`:"Todo o período";
+function perHtml(R,px,gerIds){
+  const curY=String(new Date().getFullYear());
+  const anos=[...new Set([curY,...S.rotas.map(r=>(r.data||"").slice(0,4)),...S.viagens.map(v=>(v.ida||"").slice(0,4))].filter(Boolean))].sort().reverse();
+  return `<div class="rfilters"><label class="f">Período<select id="${px}-modo"><option value="mes" ${R.modo==="mes"?"selected":""}>Mensal</option><option value="ano" ${R.modo==="ano"?"selected":""}>Anual</option><option value="periodo" ${R.modo==="periodo"?"selected":""}>Escolher datas</option></select></label>
+  ${R.modo==="mes"?`<label class="f">Mês<select id="${px}-mes">${MESES_L.map((m,i)=>{const v=String(i+1).padStart(2,"0");return `<option value="${v}" ${R.mes===v?"selected":""}>${m}</option>`}).join("")}</select></label>`:""}
+  ${R.modo!=="periodo"?`<label class="f">Ano<select id="${px}-ano">${anos.map(a=>`<option ${R.ano===a?"selected":""}>${a}</option>`).join("")}</select></label>`:`<label class="f">De<input type="date" id="${px}-de" value="${esc(R.de)}"></label><label class="f">Até<input type="date" id="${px}-ate" value="${esc(R.ate)}"></label>`}
+  ${gerIds?`<label class="f">Gerente<select id="${px}-ger"><option value="">Todos</option>${gerIds.map(id=>`<option value="${esc(id)}" ${R.ger===id?"selected":""}>${esc(nameOf(id))}</option>`).join("")}</select></label>`:""}</div>`;
+}
+function perWire(view,R,px){["modo","mes","ano","de","ate","ger"].forEach(k=>{const el=view.querySelector(`#${px}-${k}`);if(el)el.onchange=()=>{R[k]=el.value;R.sel="";render()}})}
+const gerentesRotas=()=>[...new Set(S.rotas.map(r=>r.gerente_id))].sort((a,b)=>nameOf(a).localeCompare(nameOf(b)));
+
+/* ---------- Todas as rotas (gestão) ---------- */
+const RF=["Todas","Planejada","Em andamento","Encerramento pendente","Concluída","Cancelada"];
+const rfMatch=(r,f)=>f==="Todas"||(f==="Encerramento pendente"?rotaPend(r):r.status===f&&!(f!=="Concluída"&&f!=="Cancelada"&&rotaPend(r)));
+function rtodasView(view){
+  const R=S.rt||(S.rt={...newPer(),f:"Todas",q:""});const q=normKey(R.q);
+  const base=S.rotas.filter(r=>inPer(r.data,R)&&(!R.ger||r.gerente_id===R.ger));
+  const arr=sortRotas(base.filter(r=>rfMatch(r,R.f)&&(!q||normKey([r.codigo,nameOf(r.gerente_id),r.origem,...paradas(r).map(p=>p.nome+" "+p.cidade)].join(" ")).includes(q))));
+  view.innerHTML=`<div class="panel" style="gap:12px"><div><h2>Rotas de carro</h2><p class="hint">Rotas cadastradas pelos gerentes, com check-in e feedback de cada visita.</p></div>
+  ${perHtml(R,"rt",gerentesRotas())}
+  <div class="toolbar"><input id="rt-q" type="search" placeholder="Buscar cliente, cidade ou gerente" value="${esc(R.q)}">${can("exportar")?`<button class="btn" id="rt-csv" type="button">Exportar visitas (CSV)</button>`:""}<p class="msg" id="rt-msg" role="status"></p></div>
+  <div class="chips">${RF.map(f=>`<button type="button" data-rf="${esc(f)}" aria-pressed="${R.f===f}">${esc(f)} <span style="font-family:var(--f-mono)">${base.filter(r=>rfMatch(r,f)).length}</span></button>`).join("")}</div></div>
+  <div style="margin-top:12px">${arr.length?`<div class="list">${arr.map(rcard).join("")}</div>`:`<div class="empty"><b>Nenhuma rota encontrada</b><span>Mude o período, o gerente ou o filtro.</span></div>`}</div>`;
+  perWire(view,R,"rt");
+  const qi=view.querySelector("#rt-q");qi.oninput=()=>{R.q=qi.value;const pos=qi.selectionStart;render();const n=$("#rt-q");n.focus();n.setSelectionRange(pos,pos)};
+  view.querySelectorAll("[data-rf]").forEach(b=>b.onclick=()=>{R.f=b.dataset.rf;render()});
+  const b=view.querySelector("#rt-csv");if(b)b.onclick=()=>exportVisitas(arr,"#rt-msg");
+  wireRotas(view);
+}
+function exportVisitas(rotas,msgSel){
+  const cols=["Rota","Data","Gerente","Status da rota","Saída","Nº","Cliente","Cidade","Endereço","Objetivo","Km do trecho","Check-in (hora)","Distância do check-in ao cliente (m)","Check-in no local?","Link do mapa","Resultado","Valor do pedido (R$)","O que aconteceu","Próximo passo","Km previsto da rota","Km do painel","Custo combustível da rota (R$)","Veículo","Placa"];
+  const rows=[];sortRotas(rotas).reverse().forEach(r=>paradas(r).forEach((p,i)=>{const ck=p.checkin||{},fb=p.feedback||{};
+    rows.push([r.codigo,brD(r.data),nameOf(r.gerente_id),rotaPend(r)?"Encerramento pendente":r.status,r.origem,i+1,p.nome,p.cidade,p.endereco,p.objetivo,fmtN(p.kmTrecho),ck.em?fdt(ck.em):"",ck.distM??"",p.checkin?(ck.semGps?"Sem GPS":ckOk(p)?"Sim":ck.distM==null?"Sem referência":"Não"):"Sem check-in",ck.lat!=null?mapsLink(ck.lat,ck.lng):"",fb.resultado?resLabel(fb.resultado):"Pendente",fmtN(fb.valor),fb.obs||"",fb.proximo||"",i===0?fmtN(num(r.km_previsto)):"",i===0?fmtN(kmReal(r)):"",i===0?fmtN(custoRota(r)):"",r.veiculo?r.veiculo.modelo:"",r.veiculo?String(r.veiculo.placa||"").toUpperCase():""])}));
+  saveCsv("visitas-carro-imbat",cols,rows,msgSel);
+}
+
+/* ---------- Relatório carro ---------- */
+function rcarroView(view){
+  const R=S.rc||(S.rc=newPer());
+  const base=S.rotas.filter(r=>r.status!=="Cancelada"&&inPer(r.data,R)&&(!R.ger||r.gerente_id===R.ger));
+  const vis=base.flatMap(r=>paradas(r).map(p=>({r,p})));const real=vis.filter(x=>visitou(x.p));
+  const ped=real.filter(x=>x.p.feedback.resultado==="pedido");const vPed=ped.reduce((a,x)=>a+(x.p.feedback.valor||0),0);
+  const km=base.reduce((a,r)=>a+(kmUsado(r)||0),0);const custo=base.reduce((a,r)=>a+(custoRota(r)||0),0);
+  const okN=real.filter(x=>ckOk(x.p)).length;
+  const pct=(a,b)=>b?Math.round(a/b*100)+"%":"—";
+  const G=new Map();base.forEach(r=>{const g=G.get(r.gerente_id)||{id:r.gerente_id,rotas:0,km:0,custo:0,plan:0,real:0,ok:0,ped:0,vped:0,pend:0,cid:new Set()};
+    g.rotas++;g.km+=kmUsado(r)||0;g.custo+=custoRota(r)||0;if(rotaPend(r))g.pend++;
+    paradas(r).forEach(p=>{g.plan++;if(p.cidade)g.cid.add(p.cidade);if(visitou(p)){g.real++;if(ckOk(p))g.ok++;if(p.feedback.resultado==="pedido"){g.ped++;g.vped+=p.feedback.valor||0}}});G.set(r.gerente_id,g)});
+  const gs=[...G.values()].sort((a,b)=>b.real-a.real||nameOf(a.id).localeCompare(nameOf(b.id)));
+  const C=new Map();real.forEach(({r,p})=>{const k=normKey(p.cidade)||"-";const c=C.get(k)||{cidade:p.cidade||"Sem cidade",vis:0,cli:new Set(),ger:new Set(),ped:0,vped:0};c.vis++;c.cli.add(p.clienteId||p.nome);c.ger.add(r.gerente_id);if(p.feedback.resultado==="pedido"){c.ped++;c.vped+=p.feedback.valor||0}C.set(k,c)});
+  const cs=[...C.values()].sort((a,b)=>b.vis-a.vis);
+  const RES=RESULTADOS.map(([k,l])=>[l,vis.filter(x=>x.p.feedback&&x.p.feedback.resultado===k).length]);
+  const alertas=real.filter(x=>!ckOk(x.p));
+  view.innerHTML=`<div class="panel" style="gap:16px"><div><h2>Relatório de viagens de carro</h2><p class="hint">Km rodados, custo de combustível e resultado das visitas. Usa o km do painel quando o gerente informa; senão, o km calculado pelo mapa. Rotas canceladas ficam de fora.</p></div>
+  ${perHtml(R,"rc",gerentesRotas())}
+  <div class="rhead"><span class="role">${esc(perLabel(R))}</span>${R.ger?`<span class="role">${esc(nameOf(R.ger))}</span>`:""}</div>
+  <div class="kpis"><div><span class="k">Rotas</span><span class="v">${base.length}</span></div><div><span class="k">Km rodados</span><span class="v">${kmF(Math.round(km))}</span></div><div><span class="k">Combustível</span><span class="v">${brl(custo)}</span></div>
+  <div><span class="k">Visitas feitas</span><span class="v">${real.length} <small>de ${vis.length} planejadas</small></span></div><div><span class="k">Check-in no local</span><span class="v">${pct(okN,real.length)}</span></div><div><span class="k">Pedidos fechados</span><span class="v">${ped.length} <small>${brl(vPed)}</small></span></div></div>
+  ${base.length?`
+  <section class="rsec"><div class="rsec-h"><h3>Por gerente</h3>${can("exportar")?`<button class="btn" id="rc-csv-g" type="button">Exportar resumo</button>`:""}</div>
+  <div class="tscroll"><table class="vt sum"><thead><tr><th>Gerente</th><th class="num">Rotas</th><th class="num">Km</th><th class="num">Combustível</th><th class="num">Visitas</th><th class="num">Check-in no local</th><th class="num">Pedidos</th><th class="num">Valor pedidos</th><th class="num">Cidades</th><th class="num">Pendentes</th></tr></thead>
+  <tbody>${gs.map(g=>`<tr><td><b>${esc(nameOf(g.id))}</b></td><td class="num">${g.rotas}</td><td class="num">${kmF(Math.round(g.km))}</td><td class="num">${brl(g.custo)}</td><td class="num">${g.real} <span class="sub">de ${g.plan}</span></td><td class="num">${pct(g.ok,g.real)}</td><td class="num">${g.ped}</td><td class="num">${brl(g.vped)}</td><td class="num">${g.cid.size}</td><td class="num">${g.pend?`<span class="up">${g.pend}</span>`:"—"}</td></tr>`).join("")}</tbody></table></div></section>
+  <section class="rsec"><div class="rsec-h"><h3>Resultado das visitas</h3></div><div class="kpis">${RES.map(([l,n])=>`<div><span class="k">${esc(l)}</span><span class="v">${n}</span></div>`).join("")}</div></section>
+  <section class="rsec"><div class="rsec-h"><h3>Por cidade</h3></div>
+  ${cs.length?`<div class="tscroll"><table class="vt sum"><thead><tr><th>Cidade</th><th class="num">Visitas</th><th class="num">Clientes</th><th class="num">Gerentes</th><th class="num">Pedidos</th><th class="num">Valor pedidos</th></tr></thead><tbody>${cs.map(c=>`<tr><td><b>${esc(c.cidade)}</b></td><td class="num">${c.vis}</td><td class="num">${c.cli.size}</td><td class="num">${c.ger.size}</td><td class="num">${c.ped}</td><td class="num">${brl(c.vped)}</td></tr>`).join("")}</tbody></table></div>`:`<p class="hint">Nenhuma visita realizada no período.</p>`}</section>
+  <section class="rsec"><div class="rsec-h"><h3>Visitas para conferir</h3></div><p class="hint">Visitas registradas como feitas, mas com check-in longe do endereço do cliente (mais de 1 km) ou sem localização.</p>
+  ${alertas.length?`<div class="tscroll"><table class="vt rep"><thead><tr><th>Data</th><th>Gerente</th><th>Cliente</th><th>Cidade</th><th>Check-in</th><th>Resultado</th></tr></thead><tbody>${alertas.map(({r,p})=>{const ck=p.checkin;return `<tr class="hi"><td>${fd(r.data)}</td><td>${esc(nameOf(r.gerente_id))}</td><td>${esc(p.nome)}</td><td>${esc(p.cidade||"")}</td><td>${ck?distTxt(ck)+(ck.lat!=null?` · <a href="${mapsLink(ck.lat,ck.lng)}" target="_blank" rel="noopener">mapa</a>`:""):"Sem check-in"}</td><td>${esc(resLabel(p.feedback.resultado))}</td></tr>`}).join("")}</tbody></table></div>`:`<p class="hint">Nenhuma visita para conferir. 👍</p>`}</section>
+  <section class="rsec"><div class="rsec-h"><h3>Todas as visitas do período</h3>${can("exportar")?`<button class="btn" id="rc-csv" type="button">Exportar visitas</button>`:""}</div>
+  <div class="tscroll"><table class="vt rep"><thead><tr><th>Data</th><th>Gerente</th><th>Cliente</th><th>Cidade</th><th>Objetivo</th><th>Resultado</th><th class="num">Pedido</th><th>O que aconteceu</th></tr></thead><tbody>${vis.slice().sort((a,b)=>(a.r.data||"").localeCompare(b.r.data||"")).map(({r,p})=>`<tr><td>${fd(r.data)}</td><td>${esc(nameOf(r.gerente_id))}</td><td>${esc(p.nome)}</td><td>${esc(p.cidade||"")}</td><td>${esc(p.objetivo||"")}</td><td>${p.feedback?esc(resLabel(p.feedback.resultado)):`<span class="up">Pendente</span>`}</td><td class="num">${p.feedback&&p.feedback.valor?brl(p.feedback.valor):"—"}</td><td class="obs">${esc(p.feedback?p.feedback.obs:"")}</td></tr>`).join("")}</tbody></table></div></section>`
+  :`<div class="empty"><b>Nenhuma rota em ${esc(perLabel(R).toLowerCase())}</b><span>Escolha outro período ou gerente.</span></div>`}
+  <p class="msg" id="rc-msg" role="status"></p></div>`;
+  perWire(view,R,"rc");
+  const b1=view.querySelector("#rc-csv");if(b1)b1.onclick=()=>exportVisitas(base,"#rc-msg");
+  const b2=view.querySelector("#rc-csv-g");if(b2)b2.onclick=()=>saveCsv("resumo-carro-imbat",["Gerente","Rotas","Km","Combustível (R$)","Visitas planejadas","Visitas feitas","Check-in no local","Pedidos","Valor pedidos (R$)","Cidades","Rotas pendentes"],
+    [[`Período: ${perLabel(R)}`],...gs.map(g=>[nameOf(g.id),g.rotas,fmtN(Math.round(g.km*10)/10),fmtN(Math.round(g.custo*100)/100),g.plan,g.real,g.ok,g.ped,fmtN(g.vped),g.cid.size,g.pend])],"#rc-msg");
+}
+
+/* ---------- Relatório geral por gerente (aéreo + carro) ---------- */
+function rgeralView(view){
+  const R=S.rg||(S.rg=newPer());const sv=seesValues();
+  const aer=S.viagens.filter(v=>v.status!=="Cancelada pelo solicitante"&&v.status!=="Reprovada"&&inPer(v.ida,R));
+  const car=S.rotas.filter(r=>r.status!=="Cancelada"&&inPer(r.data,R));
+  const P=new Map();const pg=id=>P.get(id)||(P.set(id,{id,an:0,av:0,rn:0,km:0,rv:0,vis:0,ped:0,vped:0,cid:new Set()}),P.get(id));
+  aer.forEach(v=>{const g=pg(v.solicitanteId);g.an++;g.av+=totalFinal(v)||0;if(v.destino)g.cid.add(v.destino.trim())});
+  car.forEach(r=>{const g=pg(r.gerente_id);g.rn++;g.km+=kmUsado(r)||0;g.rv+=custoRota(r)||0;paradas(r).forEach(p=>{if(visitou(p)){g.vis++;if(p.cidade)g.cid.add(p.cidade);if(p.feedback.resultado==="pedido"){g.ped++;g.vped+=p.feedback.valor||0}}})});
+  const ps=[...P.values()].sort((a,b)=>(b.av+b.rv)-(a.av+a.rv)||nameOf(a.id).localeCompare(nameOf(b.id)));
+  if(R.sel&&!P.has(R.sel))R.sel="";
+  const T=ps.reduce((a,g)=>{for(const k of ["an","av","rn","km","rv","vis","ped","vped"])a[k]+=g[k];return a},{an:0,av:0,rn:0,km:0,rv:0,vis:0,ped:0,vped:0});
+  let tl="";
+  if(R.sel){const items=[...aer.filter(v=>v.solicitanteId===R.sel).map(v=>({d:v.ida,h:`<span class="tl-ic">✈️</span><div><b>${fd(v.ida)} a ${fd(v.volta)} · ${esc(v.origem)} → ${esc(v.destino)}</b><div class="sub">${esc(v.motivo||"")}${v.evento?" · "+esc(v.evento):""} · ${esc(v.status)}${sv&&totalFinal(v)!=null?" · "+brl(totalFinal(v)):""}</div></div>`})),
+      ...car.filter(r=>r.gerente_id===R.sel).map(r=>{const p=paradas(r);const cid=[...new Set(p.map(x=>x.cidade).filter(Boolean))];return {d:r.data,h:`<span class="tl-ic">🚗</span><div><b>${fd(r.data)} · ${esc(cidadeCurta(r.origem)||r.origem)} → ${esc(cid.join(", ")||"—")}</b><div class="sub">${p.filter(visitou).length} de ${p.length} visitas · ${kmF(kmUsado(r))}${custoRota(r)!=null?" · "+brl(custoRota(r)):""}${rotaPend(r)?" · encerramento pendente":""}</div><div class="sub">${esc(p.map(x=>x.nome+(x.feedback?` (${resLabel(x.feedback.resultado)})`:"")).join(" · "))}</div></div>`}})].sort((a,b)=>(a.d||"").localeCompare(b.d||""));
+    tl=`<section class="rsec"><div class="rsec-h"><h3>Linha do tempo de ${esc(nameOf(R.sel))}</h3><button class="btn ghost" id="rg-clear" type="button">Fechar</button></div><div class="tl">${items.map(x=>`<div class="tl-it">${x.h}</div>`).join("")||`<p class="hint">Sem viagens no período.</p>`}</div></section>`}
+  view.innerHTML=`<div class="panel" style="gap:16px"><div><h2>Relatório geral por gerente</h2><p class="hint">Viagens aéreas e de carro juntas: quanto cada gerente gastou, por onde passou e o resultado das visitas. Toque em um nome para ver a linha do tempo.</p></div>
+  ${perHtml(R,"rg")}
+  <div class="rhead"><span class="role">${esc(perLabel(R))}</span></div>
+  <div class="kpis">${sv?`<div><span class="k">Total gasto</span><span class="v">${brl(T.av+T.rv)}</span></div><div><span class="k">Aéreo</span><span class="v">${brl(T.av)} <small>${T.an} viage${T.an===1?"m":"ns"}</small></span></div>`:`<div><span class="k">Viagens aéreas</span><span class="v">${T.an}</span></div>`}<div><span class="k">Carro</span><span class="v">${brl(T.rv)} <small>${T.rn} rota${T.rn===1?"":"s"} · ${kmF(Math.round(T.km))}</small></span></div><div><span class="k">Visitas feitas</span><span class="v">${T.vis}</span></div><div><span class="k">Pedidos fechados</span><span class="v">${T.ped} <small>${brl(T.vped)}</small></span></div></div>
+  ${ps.length?`<section class="rsec"><div class="rsec-h"><h3>Por gerente</h3>${can("exportar")?`<button class="btn" id="rg-csv" type="button">Exportar</button>`:""}</div>
+  <div class="tscroll"><table class="vt sum"><thead><tr><th>Gerente</th><th class="num">Viagens aéreas</th>${sv?`<th class="num">Gasto aéreo</th>`:""}<th class="num">Rotas de carro</th><th class="num">Km</th><th class="num">Gasto carro</th>${sv?`<th class="num">Total gasto</th>`:""}<th class="num">Visitas</th><th class="num">Pedidos</th><th>Cidades</th></tr></thead>
+  <tbody>${ps.map(g=>`<tr class="click${R.sel===g.id?" sel":""}" data-g="${esc(g.id)}" tabindex="0"><td><b>${esc(nameOf(g.id))}</b></td><td class="num">${g.an}</td>${sv?`<td class="num">${brl(g.av)}</td>`:""}<td class="num">${g.rn}</td><td class="num">${kmF(Math.round(g.km))}</td><td class="num">${brl(g.rv)}</td>${sv?`<td class="num"><b>${brl(g.av+g.rv)}</b></td>`:""}<td class="num">${g.vis}</td><td class="num">${g.ped}${g.vped?` <span class="sub">${brl(g.vped)}</span>`:""}</td><td class="obs">${esc([...g.cid].join(", "))}</td></tr>`).join("")}</tbody></table></div></section>${tl}`
+  :`<div class="empty"><b>Nenhuma viagem em ${esc(perLabel(R).toLowerCase())}</b><span>Escolha outro período.</span></div>`}
+  <p class="msg" id="rg-msg" role="status"></p></div>`;
+  perWire(view,R,"rg");
+  view.querySelectorAll("tr[data-g]").forEach(tr=>{const go=()=>{R.sel=R.sel===tr.dataset.g?"":tr.dataset.g;render()};tr.onclick=go;tr.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();go()}}});
+  const cl=view.querySelector("#rg-clear");if(cl)cl.onclick=()=>{R.sel="";render()};
+  const b=view.querySelector("#rg-csv");if(b)b.onclick=()=>saveCsv("geral-gerentes-imbat",["Gerente","Viagens aéreas",...(sv?["Gasto aéreo (R$)"]:[]),"Rotas de carro","Km","Gasto carro (R$)",...(sv?["Total gasto (R$)"]:[]),"Visitas feitas","Pedidos","Valor pedidos (R$)","Cidades"],
+    [[`Período: ${perLabel(R)}`],...ps.map(g=>[nameOf(g.id),g.an,...(sv?[fmtN(Math.round(g.av*100)/100)]:[]),g.rn,fmtN(Math.round(g.km*10)/10),fmtN(Math.round(g.rv*100)/100),...(sv?[fmtN(Math.round((g.av+g.rv)*100)/100)]:[]),g.vis,g.ped,fmtN(g.vped),[...g.cid].join(", ")])],"#rg-msg");
+}
+
+/* ---------- Configurações (administração master) ---------- */
+function veicView(view){
+  const pessoas=Object.values(S.perfis).filter(p=>p.ativo!==false&&(p.master||(p.perms&&p.perms.solicitar))).sort((a,b)=>(a.nome||"").localeCompare(b.nome||""));
+  const ed=S.vEd;
+  view.innerHTML=`<div class="panel"><div><h2>Veículos dos gerentes</h2><p class="hint">Cadastre o carro de cada gerente. O consumo (km por litro) é usado para calcular o custo de combustível das rotas. Se o gerente trocar de carro, edite aqui: as rotas antigas continuam com o carro da época.</p></div>
+  <div class="people2">${pessoas.map(p=>{const v=S.veiculos[p.id];
+    if(ed===p.id)return `<div class="prow"><b>${esc(p.nome)}</b><form class="inline-form" id="ve-form" novalidate><div class="grid"><label class="f">Modelo<input id="ve-modelo" value="${esc(v?v.modelo:"")}" placeholder="Ex.: Fiat Cronos"></label><label class="f">Placa<input id="ve-placa" value="${esc(v?v.placa:"")}" placeholder="Ex.: ABC1D23" autocapitalize="characters"></label><label class="f">Cor<input id="ve-cor" value="${esc(v&&v.cor||"")}"></label><label class="f">Consumo (km por litro)<input id="ve-cons" inputmode="decimal" value="${esc(v?fmtN(num(v.consumo_km_l)):"")}" placeholder="Ex.: 12"></label><label class="f full">Locadora <small>opcional</small><input id="ve-loc" value="${esc(v&&v.locadora||"")}"></label></div><div class="actions"><button class="btn primary" type="submit">Salvar veículo</button><button class="btn ghost" type="button" id="ve-cancel">Cancelar</button>${v?`<button class="btn no" type="button" id="ve-del">Remover veículo</button>`:""}<p class="msg err" id="ve-msg"></p></div></form></div>`;
+    return `<div class="prow"><div class="ptop"><div style="min-width:0"><b>${esc(p.nome)}</b> <span class="sub">${esc([p.cargo,p.departamento].filter(Boolean).join(" · "))}</span><div class="sub">${v?"🚗 "+esc(veicTxt(v))+(v.locadora?" · "+esc(v.locadora):""):"Sem veículo cadastrado"}</div></div><button class="btn" type="button" data-ve="${esc(p.id)}">${v?"Editar":"Cadastrar veículo"}</button></div></div>`}).join("")||`<p class="hint">Nenhum gerente com acesso a viagens.</p>`}</div></div>`;
+  view.querySelectorAll("[data-ve]").forEach(b=>b.onclick=()=>{S.vEd=b.dataset.ve;render()});
+  const f=view.querySelector("#ve-form");if(!f)return;
+  f.querySelector("#ve-cancel").onclick=()=>{S.vEd=null;render()};
+  const del=f.querySelector("#ve-del");if(del)del.onclick=async()=>{del.disabled=true;const {error}=await S.sb.from("veiculos").delete().eq("gerente_id",ed);if(error){del.disabled=false;f.querySelector("#ve-msg").textContent=errText(dbErr(error));return}S.vEd=null;await loadAll()};
+  f.onsubmit=async e=>{e.preventDefault();const m=f.querySelector("#ve-msg");const g=id=>f.querySelector(id).value.trim();
+    const cons=parseBR(g("#ve-cons"));
+    if(!g("#ve-modelo")||!g("#ve-placa")){m.textContent="Informe o modelo e a placa.";return}
+    if(!cons||Number.isNaN(cons)){m.textContent="Informe o consumo em km por litro, por exemplo 12 ou 11,5.";return}
+    const {error}=await S.sb.from("veiculos").upsert({gerente_id:ed,modelo:g("#ve-modelo"),placa:g("#ve-placa").toUpperCase().replace(/\s/g,""),cor:g("#ve-cor"),consumo_km_l:cons,locadora:g("#ve-loc"),atualizado_em:new Date().toISOString()});
+    if(error){m.textContent=errText(dbErr(error));return}S.vEd=null;await loadAll()};
+}
+function cliView(view){
+  const q=normKey(S.cq||"");const cnt={};S.rotas.forEach(r=>paradas(r).forEach(p=>{if(p.clienteId&&visitou(p))cnt[p.clienteId]=(cnt[p.clienteId]||0)+1}));
+  const arr=S.clientes.filter(c=>!q||normKey(c.nome+" "+c.cidade+" "+c.endereco).includes(q)).sort((a,b)=>(a.nome||"").localeCompare(b.nome||""));
+  const ed=S.cEd;
+  view.innerHTML=`<div class="panel"><div><h2>Clientes</h2><p class="hint">A lista se forma sozinha: quando um gerente visita um cliente novo, ele é cadastrado aqui. Corrija nomes e endereços ou remova repetidos.</p></div>
+  <div class="toolbar"><input id="cl-q" type="search" placeholder="Buscar cliente ou cidade" value="${esc(S.cq||"")}"><span class="sub">${S.clientes.length} cliente${S.clientes.length===1?"":"s"}</span></div>
+  <div class="people2">${arr.map(c=>ed===c.id?`<div class="prow"><form class="inline-form" id="cl-form" novalidate><div class="grid"><label class="f">Nome<input id="cl-nome" value="${esc(c.nome)}"></label><label class="f">Cidade<input id="cl-cid" value="${esc(c.cidade||"")}"></label><label class="f full">Endereço<input id="cl-end" value="${esc(c.endereco)}"></label></div><div class="actions"><button class="btn primary" type="submit">Salvar</button><button class="btn ghost" type="button" id="cl-cancel">Cancelar</button><button class="btn no" type="button" id="cl-del">Remover cliente</button><p class="msg err" id="cl-msg"></p></div></form></div>`
+    :`<div class="prow"><div class="ptop"><div style="min-width:0"><b>${esc(c.nome)}</b> <span class="sub">${esc(c.cidade||"")}</span><div class="sub">${esc(c.endereco)}${c.lat==null?' · <span class="up">sem localização no mapa</span>':""}</div><div class="sub">${cnt[c.id]||0} visita${cnt[c.id]===1?"":"s"}${c.criado_por?` · cadastrado por ${esc(nameOf(c.criado_por))}`:""}</div></div><button class="btn" type="button" data-cl="${esc(c.id)}">Editar</button></div></div>`).join("")||`<p class="hint">${S.clientes.length?"Nenhum cliente encontrado.":"Os clientes aparecem aqui quando os gerentes cadastrarem as primeiras rotas."}</p>`}</div></div>`;
+  const qi=view.querySelector("#cl-q");qi.oninput=()=>{S.cq=qi.value;const pos=qi.selectionStart;render();const n=$("#cl-q");n.focus();n.setSelectionRange(pos,pos)};
+  view.querySelectorAll("[data-cl]").forEach(b=>b.onclick=()=>{S.cEd=b.dataset.cl;render()});
+  const f=view.querySelector("#cl-form");if(!f)return;const c=cliById(ed);
+  f.querySelector("#cl-cancel").onclick=()=>{S.cEd=null;render()};
+  f.querySelector("#cl-del").onclick=async e=>{const b=e.target;if(!b.dataset.ok){b.dataset.ok="1";b.textContent="Confirmar remoção";return}
+    const {error}=await S.sb.from("clientes").delete().eq("id",ed);if(error){f.querySelector("#cl-msg").textContent=errText(dbErr(error));return}S.cEd=null;await loadAll()};
+  f.onsubmit=async e=>{e.preventDefault();const m=f.querySelector("#cl-msg");const nome=f.querySelector("#cl-nome").value.trim(),end=f.querySelector("#cl-end").value.trim(),cid=f.querySelector("#cl-cid").value.trim();
+    if(!nome||!end){m.textContent="Informe o nome e o endereço.";return}
+    const upd={nome,endereco:end,cidade:cid};
+    if(normKey(end)!==normKey(c.endereco)||c.lat==null){m.className="msg";m.textContent="Localizando no mapa…";
+      try{const g=await geocode(end);if(g){upd.lat=g.lat;upd.lng=g.lng;if(!cid)upd.cidade=g.cidade}else{m.className="msg err";m.textContent="Endereço não encontrado no mapa. Confira e tente de novo.";return}}catch(_){m.className="msg err";m.textContent="Não consegui acessar o mapa agora.";return}}
+    const {error}=await S.sb.from("clientes").update(upd).eq("id",ed);if(error){m.className="msg err";m.textContent=errText(dbErr(error));return}S.cEd=null;await loadAll()};
+}
+function combView(view){
+  const p=precoComb();
+  view.innerHTML=`<div class="panel"><div><h2>Preço do combustível</h2><p class="hint">Usado para calcular o custo das rotas: km ÷ consumo do carro × preço do litro. Cada rota guarda o preço do dia em que foi cadastrada, então mudar aqui não altera os relatórios antigos.</p></div>
+  <form class="inline-form" id="cb-form" novalidate><label class="f" style="max-width:260px">Preço do litro (R$)<input id="cb-val" inputmode="decimal" value="${esc(p?fmtN(p):"")}" placeholder="Ex.: 6,29"></label>
+  <div class="actions"><button class="btn primary" type="submit">Salvar preço</button><p class="msg" id="cb-msg"></p></div></form></div>`;
+  const f=view.querySelector("#cb-form");f.onsubmit=async e=>{e.preventDefault();const m=f.querySelector("#cb-msg");const v=parseBR(f.querySelector("#cb-val").value);
+    if(!v||Number.isNaN(v)){m.className="msg err";m.textContent="Digite o preço, por exemplo 6,29.";return}
+    const {error}=await S.sb.from("config").upsert({chave:"preco_combustivel",valor:v,atualizado_em:new Date().toISOString()});
+    if(error){m.className="msg err";m.textContent=errText(dbErr(error));return}await loadAll();const mm=$("#cb-msg");if(mm){mm.className="msg good";mm.textContent="Preço salvo."}};
 }
 
 init();
