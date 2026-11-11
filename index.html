@@ -196,6 +196,26 @@ table.months{min-width:900px;font-size:12px}
 .qform{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
 .qcard .btn.ok{width:100%}
 
+
+/* Áreas (aéreo / carro / relatórios / configurações) e viagens de carro */
+nav.modes{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:14px}
+nav.modes button{font:inherit;font-weight:600;font-size:15px;background:var(--surface);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:12px 14px;cursor:pointer;display:flex;gap:8px;align-items:center;justify-content:center}
+nav.modes button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+nav.modes .count{font-family:var(--f-mono);font-size:11px;background:var(--pend-bg);color:var(--pend);border-radius:999px;padding:1px 7px}
+.sted-list,.stops{display:flex;flex-direction:column;gap:10px}
+.sted,.stop{border:1px solid var(--line);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:10px;background:var(--surface-2);min-width:0}
+.sted-h,.stop-h{display:flex;align-items:flex-start;gap:10px}
+.sted-h{align-items:center}
+.stopn{flex:none;width:28px;height:28px;border-radius:999px;background:var(--accent);color:var(--accent-ink);display:flex;align-items:center;justify-content:center;font-weight:700;font-family:var(--f-display);font-size:16px}
+.stop a{color:var(--accent)}
+.btn.xl{padding:13px 16px;font-size:16px;flex:1;min-width:200px}
+.seg.big label{padding:10px 13px;font-size:15px}
+.seg.big label:has(input:checked){border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:600}
+.tl{display:flex;flex-direction:column;border-left:2px solid var(--line);margin-left:10px}
+.tl-it{display:flex;gap:10px;padding:8px 0 8px 14px;position:relative;min-width:0}
+.tl-it>div{min-width:0}
+.tl-ic{position:absolute;left:-12px;top:8px;background:var(--surface);font-size:15px;line-height:1}
+.stop .msg:empty{display:none}
 </style>
 </head>
 <body>
@@ -206,6 +226,7 @@ table.months{min-width:900px;font-size:12px}
   </header>
   <div id="gate" class="gate"><h2>Carregando…</h2><p class="hint">Conectando aos registros de viagem.</p></div>
   <div id="app" hidden>
+    <nav class="modes" id="modes" hidden></nav>
     <nav class="tabs" id="tabs" role="tablist"></nav>
     <div id="view" style="margin-top:18px"></div>
   </div>
