@@ -51,7 +51,7 @@ async function saveTrip(v,patch){
 async function addTrip(d,now){
   const {error}=await S.sb.from("viagens").insert({codigo:tripCode(),solicitante_id:S.myId,status:"Pendente",colaborador:d.colaborador,departamento:d.departamento,
     origem:d.origem,destino:d.destino,ida:d.ida,volta:d.volta,horario:d.horario,motivo:d.motivo,evento:d.evento,hospedagem:d.hospedagem,transporte:d.transporte,
-    observacoes:d.observacoes,doc:{...(d.voltaDif?{rotaVolta:{de:d.voltaDe,para:d.voltaPara}}:{}),historico:[{em:now,porId:S.myId,acao:"Solicitação enviada"}]}});
+    observacoes:d.observacoes,doc:{...(d.voltaDif?{rotaVolta:{de:d.voltaDe,para:d.voltaPara}}:{}),...(d.hospedagem==="Sim"?{hotel:{nome:d.hotelNome,endereco:d.hotelEnd,valor:d.hotelVal}}:{}),historico:[{em:now,porId:S.myId,acao:"Solicitação enviada"}]}});
   if(error)throw dbErr(error);await loadAll();
 }
 async function loadAll(){
@@ -211,12 +211,15 @@ function buildNova(){
   f.querySelector("#n-ida").addEventListener("change",e=>{f.querySelector("#n-volta").min=e.target.value||today()});
   const vd=f.querySelector("#n-voltadif"),vb=f.querySelector("#n-voltabox");
   vd.onchange=()=>{vb.hidden=!vd.checked;if(vd.checked&&!f.querySelector("#n-voltade").value)f.querySelector("#n-voltade").value=f.querySelector("#n-destino").value.trim()};
-  f.addEventListener("reset",()=>setTimeout(()=>{vb.hidden=true},0));
+  const hb=f.querySelector("#n-hotelbox");const hsync=()=>{hb.hidden=f.querySelector('input[name="n-hosp"]:checked').value!=="Sim"};
+  f.querySelectorAll('input[name="n-hosp"]').forEach(x=>x.onchange=hsync);
+  f.addEventListener("reset",()=>setTimeout(()=>{vb.hidden=true;hsync()},0));
   f.onsubmit=async e=>{e.preventDefault();if(S.busy)return;
     const g=id=>f.querySelector(id).value.trim();const msg=f.querySelector("#n-msg");
     const d={colaborador:g("#n-colab"),departamento:g("#n-dep"),origem:g("#n-origem"),destino:g("#n-destino"),ida:g("#n-ida"),volta:g("#n-volta"),horario:g("#n-hora"),motivo:g("#n-motivo"),evento:g("#n-evento"),
       hospedagem:f.querySelector('input[name="n-hosp"]:checked').value,transporte:f.querySelector('input[name="n-transp"]:checked').value,observacoes:g("#n-obs"),
-      voltaDif:f.querySelector("#n-voltadif").checked,voltaDe:g("#n-voltade"),voltaPara:g("#n-voltapara")};
+      voltaDif:f.querySelector("#n-voltadif").checked,voltaDe:g("#n-voltade"),voltaPara:g("#n-voltapara"),
+      hotelNome:g("#n-hotel"),hotelEnd:g("#n-hotelend"),hotelVal:parseBR(g("#n-hotelval"))};
     const miss=[["colaborador","quem vai viajar"],["departamento","o departamento"],["origem","a cidade de origem"],["destino","a cidade de destino"],["ida","a data de ida"],["volta","a data de volta"],
       ...(d.voltaDif?[["voltaDe","de onde sai a volta"],["voltaPara","para onde é a volta"]]:[]),["horario","o horário preferencial"],["motivo","o motivo"],["evento","o cliente que vai visitar"],["observacoes","as observações"]].filter(([k])=>!d[k]).map(x=>x[1]);
     msg.className="msg err";
@@ -224,6 +227,8 @@ function buildNova(){
     if(miss.length){msg.textContent="Falta preencher "+miss.join(", ")+".";return}
     if(d.ida<today()){msg.textContent="A data de ida já passou. Escolha uma data a partir de hoje.";return}
     if(d.volta<d.ida){msg.textContent="A data de volta é anterior à data de ida.";return}
+    if(d.hospedagem==="Sim"&&!d.hotelNome){msg.textContent="Informe o hotel em que você quer ficar.";return}
+    if(Number.isNaN(d.hotelVal)){msg.textContent="Valor do hotel: use só números, por exemplo 650,00.";return}
     const now=new Date().toISOString();
     S.busy=true;f.querySelector("#n-enviar").disabled=true;
     try{await addTrip(d,now);
@@ -346,6 +351,7 @@ function card(v){
   <div><span class="k">Motivo</span>${esc(v.motivo)}</div>
   <div><span class="k">Cliente / feira</span>${esc(v.evento||"—")}</div>
   <div><span class="k">Transporte local</span>${esc(v.transporte)}</div>
+  ${v.hospedagem==="Sim"&&v.hotel&&v.hotel.nome?`<div style="grid-column:1/-1"><span class="k">🏨 Hotel indicado pelo viajante</span>${esc(v.hotel.nome)}${v.hotel.endereco?" · "+esc(v.hotel.endereco):""}${v.hotel.valor?` · <b>${esc(brl(v.hotel.valor))}</b>`:""}</div>`:""}
   ${v.observacoes?`<div style="grid-column:1/-1"><span class="k">Observações</span>${esc(v.observacoes)}</div>`:""}</div>`;
   if(v.sugestao&&v.status==="Nova data sugerida"){
     h+=`<div class="note sug"><strong>${esc(nameOf(v.sugestao.porId))} sugeriu outras datas</strong><span>Ida ${fd(v.sugestao.ida)} · Volta ${fd(v.sugestao.volta)}</span>${v.sugestao.motivo?`<span>${esc(v.sugestao.motivo)}</span>`:""}</div>`;
@@ -424,8 +430,8 @@ async function saveCsv(name,cols,rows,msgSel){
 }
 function exportCsv(msgSel){
   const sv=seesValues();
-  const cols=["Protocolo","Data da solicitação","Colaborador","Departamento","Solicitado por","Cidade de origem","Cidade de destino","Data de ida","Data de volta","Ida original","Volta original","Volta saindo de","Volta chegando em","Horário preferencial","Motivo","Cliente / feira","Necessita hospedagem?","Diárias","Transporte local?","Status","Observações",...(sv?["Passagem (R$)","Hospedagem (R$)","Outros (R$)","Valor original (R$)","Nº de alterações","Custo das alterações (R$)","Total final (R$)","Observação sobre valores"]:[]),"Decidido por","Data da decisão","Comentário da decisão","Compra","Compra decidida por","Data da decisão da compra","Comentário da compra","Feedback","Data do feedback","Clientes visitados","O que foi fazer","O que foi cumprido","Objetivo atingido","Cadastrou clientes?","Clientes cadastrados"];
-  const rows=sortTrips(S.viagens).reverse().map(v=>[v.codigo,brD(v.criadoEm),v.colaborador,v.departamento,nameOf(v.solicitanteId),v.origem,v.destino,brD(v.ida),brD(v.volta),brD(v.datasOriginais&&v.datasOriginais.ida),brD(v.datasOriginais&&v.datasOriginais.volta),rotaVolta(v)?rotaVolta(v).de:"",rotaVolta(v)?rotaVolta(v).para:"",v.horario,v.motivo,v.evento,v.hospedagem,v.hospedagem==="Sim"?nights(v.ida,v.volta):0,v.transporte,v.status==="Pendente"?"Aguardando aprovação":v.status,v.observacoes,
+  const cols=["Protocolo","Data da solicitação","Colaborador","Departamento","Solicitado por","Cidade de origem","Cidade de destino","Data de ida","Data de volta","Ida original","Volta original","Volta saindo de","Volta chegando em","Horário preferencial","Motivo","Cliente / feira","Necessita hospedagem?","Diárias","Transporte local?","Status","Hotel indicado","Endereço do hotel","Valor indicado do hotel (R$)","Observações",...(sv?["Passagem (R$)","Hospedagem (R$)","Outros (R$)","Valor original (R$)","Nº de alterações","Custo das alterações (R$)","Total final (R$)","Observação sobre valores"]:[]),"Decidido por","Data da decisão","Comentário da decisão","Compra","Compra decidida por","Data da decisão da compra","Comentário da compra","Feedback","Data do feedback","Clientes visitados","O que foi fazer","O que foi cumprido","Objetivo atingido","Cadastrou clientes?","Clientes cadastrados"];
+  const rows=sortTrips(S.viagens).reverse().map(v=>[v.codigo,brD(v.criadoEm),v.colaborador,v.departamento,nameOf(v.solicitanteId),v.origem,v.destino,brD(v.ida),brD(v.volta),brD(v.datasOriginais&&v.datasOriginais.ida),brD(v.datasOriginais&&v.datasOriginais.volta),rotaVolta(v)?rotaVolta(v).de:"",rotaVolta(v)?rotaVolta(v).para:"",v.horario,v.motivo,v.evento,v.hospedagem,v.hospedagem==="Sim"?nights(v.ida,v.volta):0,v.transporte,v.status==="Pendente"?"Aguardando aprovação":v.status,v.hotel?v.hotel.nome:"",v.hotel?v.hotel.endereco:"",v.hotel?fmtN(v.hotel.valor):"",v.observacoes,
     ...(sv?[fmtN(v.valores&&v.valores.passagem),fmtN(v.valores&&v.valores.hospedagem),fmtN(v.valores&&v.valores.outros),fmtN(totalOf(v)),alts(v).length,fmtN(altCost(v)),fmtN(totalFinal(v)),obsAlt(v)]:[]),
     v.decisao?nameOf(v.decisao.porId):"",v.decisao?brD(v.decisao.em):"",v.decisao?v.decisao.comentario:"",compraOf(v)||"",v.compra&&v.compra.porId?nameOf(v.compra.porId):"",v.compra&&v.compra.em?brD(v.compra.em):"",v.compra?v.compra.comentario:"",v.feedback?"Enviado":precisaFb(v)?"Pendente":"",v.feedback?brD(v.feedback.em):"",...(v.feedback?[v.feedback.clientes,v.feedback.objetivo,v.feedback.cumprido,v.feedback.atingido,v.feedback.cadastros,v.feedback.cadastrosQuais]:["","","","","",""])]);
   saveCsv("viagens-imbat",cols,rows,msgSel);
@@ -734,6 +740,9 @@ const num=x=>x==null||x===""?null:Number(x);
 const kmF=n=>n==null||isNaN(n)?"—":Number(n).toLocaleString("pt-BR",{maximumFractionDigits:1})+" km";
 const precoComb=()=>{const v=num(S.cfg&&S.cfg.preco_combustivel);return v&&v>0?v:null};
 const paradas=r=>Array.isArray(r.paradas)?r.paradas:[];
+const hoteis=r=>(r.doc&&Array.isArray(r.doc.hoteis))?r.doc.hoteis:[];
+const hotelTot=r=>hoteis(r).reduce((a,x)=>a+(num(x.valor)||0),0);
+const hotelTxt=x=>`${x.nome} · ${x.cidade} · ${x.noites} noite${x.noites===1?"":"s"} (${fds(x.entrada)} a ${fds(x.saida)})${num(x.valor)?" · "+brl(num(x.valor)):""}`;
 const kmReal=r=>{const a=num(r.km_painel_ini),b=num(r.km_painel_fim);return a!=null&&b!=null&&b>=a?Math.round((b-a)*10)/10:null};
 const kmUsado=r=>kmReal(r)??num(r.km_previsto);
 const fechDaRota=r=>{const m=(r.data||"").slice(0,7);const vid=r.veiculo&&r.veiculo.id;return (S.fech||[]).find(f=>f.mes===m&&(vid?f.veiculo_id===vid:f.gerente_id===r.gerente_id))||null};
@@ -788,7 +797,7 @@ const mapsLink=(lat,lng)=>`https://www.google.com/maps?q=${lat},${lng}`;
 const novaParada=()=>({nome:"",endereco:"",objetivo:OBJETIVOS[0],clienteId:null});
 const LASTO="imbat-ultima-saida";
 function rfReset(){let o="";try{o=localStorage.getItem(LASTO)||""}catch(_){}
-  S.rf={data:today(),origem:o,kmIni:"",volta:true,paradas:[novaParada()],calc:null}}
+  S.rf={data:today(),origem:o,kmIni:"",volta:true,paradas:[novaParada()],hoteis:[],calc:null}}
 const rfKey=F=>JSON.stringify([normKey(F.origem),F.paradas.map(p=>[p.clienteId,normKey(p.endereco)]),F.volta]);
 function veicTxt(v){if(!v)return"";const c=num(v.consumo_km_l??v.consumo);return `${v.modelo} · ${String(v.placa||"").toUpperCase()}${v.cor?" · "+v.cor:""}${c?" · "+String(c).replace(".",",")+" km/l":""}`}
 
@@ -812,6 +821,11 @@ function drawRf(){
   <div class="sted-list">${F.paradas.map((p,i)=>stedHtml(p,i,F.paradas.length)).join("")}</div>
   <div class="actions"><button class="btn sug" type="button" id="rf-add">+ Adicionar cliente</button></div>
   <label class="switch"><input type="checkbox" id="rf-volta" ${F.volta?"checked":""}> Voltar para o ponto de saída no fim do dia</label>
+  <div class="sted-list"><b>🏨 Hospedagem</b>${(F.hoteis||[]).map((x,i)=>`<div class="sted" data-h="${i}"><div class="sted-h"><b style="flex:1">Hotel ${i+1}</b><button class="btn ghost" type="button" data-hdel="${i}">Remover</button></div>
+    <div class="grid"><label class="f">Hotel<input data-hk="nome" value="${esc(x.nome)}" placeholder="Nome do hotel"></label><label class="f">Cidade<input data-hk="cidade" value="${esc(x.cidade)}"></label>
+    <label class="f">Entrada<input type="date" data-hk="entrada" value="${esc(x.entrada)}"></label><label class="f">Saída<input type="date" data-hk="saida" value="${esc(x.saida)}"></label>
+    <label class="f">Valor total (R$)<input data-hk="valor" inputmode="decimal" value="${esc(x.valor)}" placeholder="Ex.: 280,00"></label></div></div>`).join("")}
+  <div class="actions"><button class="btn" type="button" id="rf-hotel">+ Adicionar hotel</button><span class="sub">Só se for dormir fora nesta rota.</span></div></div>
   <div id="rf-calc">${calcHtml(F)}</div>
   <div class="actions"><button class="btn" type="button" id="rf-km">Calcular km</button><button class="btn primary" type="submit" id="rf-save">Salvar rota</button><p class="msg" id="rf-msg" role="status"></p></div>
   <datalist id="dl-cli">${S.clientes.map(c=>`<option value="${esc(cliDisp(c))}"></option>`).join("")}</datalist>`;
@@ -854,6 +868,11 @@ function wireRf(){
       drawRf()})});
   f.querySelector("#rf-add").onclick=()=>{F.paradas.push(novaParada());drawRf();const ins=f.querySelectorAll('.sted [data-k="nome"]');ins[ins.length-1].focus()};
   f.querySelector("#rf-km").onclick=()=>rfCalc().catch(()=>{});
+  f.querySelector("#rf-hotel").onclick=()=>{const d=F.data||today();const nx=new Date(Date.parse(d)+864e5).toISOString().slice(0,10);
+    const ult=F.paradas.length?F.paradas[F.paradas.length-1]:null;const c=ult&&ult.clienteId?cliById(ult.clienteId):null;
+    F.hoteis.push({nome:"",cidade:c&&c.cidade||"",entrada:d,saida:nx,valor:""});drawRf()};
+  f.querySelectorAll("[data-h]").forEach(box=>{const x=F.hoteis[+box.dataset.h];box.querySelectorAll("[data-hk]").forEach(el=>el.addEventListener("input",()=>{x[el.dataset.hk]=el.value}))});
+  f.querySelectorAll("[data-hdel]").forEach(b=>b.onclick=()=>{F.hoteis.splice(+b.dataset.hdel,1);drawRf()});
   f.onsubmit=e=>{e.preventDefault();rfSave()};
 }
 function redrawCalc(){const el=S.rfEl&&S.rfEl.querySelector("#rf-calc");if(el)el.innerHTML=calcHtml(S.rf)}
@@ -883,6 +902,11 @@ async function rfSave(){
   if(minhasPend().length){rfMsg("Encerre primeiro a rota anterior, em Minhas rotas.");return}
   if(!F.data){rfMsg("Informe a data da rota.");return}
   const kmIni=parseBR(F.kmIni);if(Number.isNaN(kmIni)){rfMsg("Digite o km do painel só com números.");return}
+  const hs=[];for(const [i,x] of (F.hoteis||[]).entries()){const val=parseBR(x.valor);
+    if(!x.nome.trim()||!x.cidade.trim()||!x.entrada||!x.saida){rfMsg(`Hotel ${i+1}: preencha nome, cidade, entrada e saída.`);return}
+    if(x.saida<=x.entrada){rfMsg(`Hotel ${i+1}: a saída precisa ser depois da entrada.`);return}
+    if(Number.isNaN(val)){rfMsg(`Hotel ${i+1}: valor só com números, por exemplo 280,00.`);return}
+    hs.push({id:rid(),nome:x.nome.trim(),cidade:x.cidade.trim(),entrada:x.entrada,saida:x.saida,noites:nights(x.entrada,x.saida),valor:val})}
   if(!F.calc||F.calc.key!==rfKey(F)){if(!(await rfCalc()))return}
   const C=F.calc;S.busy=true;const btn=S.rfEl.querySelector("#rf-save");btn.disabled=true;rfMsg("Salvando…","");
   try{
@@ -897,7 +921,7 @@ async function rfSave(){
     const {error}=await S.sb.from("rotas").insert({codigo:rotaCode(),gerente_id:S.myId,data:F.data,status:"Planejada",origem:F.origem.trim(),origem_lat:C.o.lat,origem_lng:C.o.lng,
       volta_origem:F.volta,paradas:ps,km_previsto:C.total,km_painel_ini:kmIni,
       veiculo:v?{id:v.id,modelo:v.modelo,placa:v.placa,cor:v.cor,consumo:num(v.consumo_km_l),locadora:v.locadora}:null,preco_combustivel:precoComb(),
-      doc:{kmEstimado:C.estimado,kmVolta:F.volta?C.legs[C.legs.length-1]:null,historico:[{em:now,porId:S.myId,acao:`Cadastrou a rota com ${ps.length} cliente${ps.length>1?"s":""} (${kmF(C.total)})`}]}});
+      doc:{hoteis:hs,kmEstimado:C.estimado,kmVolta:F.volta?C.legs[C.legs.length-1]:null,historico:[{em:now,porId:S.myId,acao:`Cadastrou a rota com ${ps.length} cliente${ps.length>1?"s":""} (${kmF(C.total)})`}]}});
     if(error)throw dbErr(error);
     try{localStorage.setItem(LASTO,F.origem.trim())}catch(_){}
     rfReset();S.rfEl=null;S.tab="rminhas";await loadAll()}
@@ -949,17 +973,21 @@ function rcard(r){
     <div><span class="k">Visitas</span><span class="v">${vis} de ${ps.length}</span></div>
     <div><span class="k">Km previsto</span><span class="v">${kmF(num(r.km_previsto))}</span></div>
     ${kr!=null?`<div><span class="k">Km do painel</span><span class="v">${kmF(kr)}</span></div>`:""}
+    ${hoteis(r).length?`<div><span class="k">Hotel</span><span class="v">${hotelTot(r)?brl(hotelTot(r)):hoteis(r).length+" noite(s)"}</span></div>`:""}
     <div><span class="k">Combustível${custo!=null?(custoReal(r)?" (real)":" (estimado)"):""}</span><span class="v">${custo!=null?brl(custo):"—"}</span></div></div>
   <hr class="perf"><div class="body">
   <div class="meta"><div><span class="k">Saída</span>${esc(r.origem)}</div><div><span class="k">Veículo</span>${r.veiculo?esc(veicTxt(r.veiculo)):"Não cadastrado"}</div>
+  ${hoteis(r).length?`<div style="grid-column:1/-1"><span class="k">🏨 Hospedagem</span>${hoteis(r).map(x=>esc(hotelTxt(x))).join("<br>")}</div>`:""}
   ${kr!=null&&num(r.km_previsto)&&Math.abs(kr-num(r.km_previsto))>Math.max(20,num(r.km_previsto)*.25)?`<div style="grid-column:1/-1"><span class="up"><b>Atenção:</b> km do painel (${kmF(kr)}) diferente do previsto (${kmF(num(r.km_previsto))}).</span></div>`:""}</div>
   <div class="stops">${ps.map((p,i)=>stopHtml(r,p,i,mine,open,A,dr)).join("")}</div>`;
   if(r.status==="Concluída"&&r.doc&&r.doc.encerramento){const e=r.doc.encerramento;h+=`<div class="note dec"><span><b>Rota encerrada</b> em ${esc(fdt(e.em))}</span>${e.obs?`<span>${esc(e.obs)}</span>`:""}</div>`}
   if(r.status==="Cancelada"&&r.doc&&r.doc.cancelamento)h+=`<div class="note dec"><span><b>Rota cancelada</b> em ${esc(fdt(r.doc.cancelamento.em))}</span><span>${esc(r.doc.cancelamento.motivo||"")}</span></div>`;
   if(!mine&&rotaPend(r))h+=`<div class="note sug"><strong>Encerramento pendente</strong><span>A rota foi em ${esc(fd(r.data))} e ${esc(nameOf(r.gerente_id))} ainda não registrou todos os feedbacks.</span></div>`;
   if(mine&&open){
-    if(!A)h+=`<div class="actions"><button class="btn sug" type="button" data-ro="open-add">+ Adicionar visita</button><button class="btn ok" type="button" data-ro="open-fim">Encerrar rota</button>${ps.some(p=>p.checkin||p.feedback)?"":`<button class="btn ghost" type="button" data-ro="open-cancel">Cancelar rota</button>`}</div>`;
+    if(!A)h+=`<div class="actions"><button class="btn sug" type="button" data-ro="open-add">+ Adicionar visita</button><button class="btn" type="button" data-ro="open-hotel">+ Adicionar hotel</button><button class="btn ok" type="button" data-ro="open-fim">Encerrar rota</button>${ps.some(p=>p.checkin||p.feedback)?"":`<button class="btn ghost" type="button" data-ro="open-cancel">Cancelar rota</button>`}</div>`;
     if(A&&A.kind==="add")h+=`<div class="inline-form"><strong>Nova visita nesta rota</strong><div class="grid"><label class="f">Cliente<input list="dl-cli2" data-dk="anome" value="${esc(dr.anome||"")}" placeholder="Digite para buscar ou cadastrar" autocomplete="off"></label><label class="f">Objetivo<select data-dk="aobj">${OBJETIVOS.map(o=>`<option ${dr.aobj===o?"selected":""}>${o}</option>`).join("")}</select></label><label class="f full">Endereço <small>se for cliente novo</small><input data-dk="aend" value="${esc(dr.aend||"")}" placeholder="Rua, número, bairro, cidade"></label></div><datalist id="dl-cli2">${S.clientes.map(c=>`<option value="${esc(cliDisp(c))}"></option>`).join("")}</datalist><div class="actions"><button class="btn primary" type="button" data-ro="add">Adicionar e recalcular km</button><button class="btn ghost" type="button" data-ro="close">Cancelar</button><p class="msg err" data-smsg></p></div></div>`;
+    if(A&&A.kind==="hotel"){const nx=new Date(Date.parse(r.data)+864e5).toISOString().slice(0,10);
+      h+=`<div class="inline-form"><strong>Adicionar hotel</strong><div class="grid"><label class="f">Hotel<input data-dk="hnome" value="${esc(dr.hnome||"")}"></label><label class="f">Cidade<input data-dk="hcid" value="${esc(dr.hcid||"")}"></label><label class="f">Entrada<input type="date" data-dk="hent" value="${esc(dr.hent||r.data)}"></label><label class="f">Saída<input type="date" data-dk="hsai" value="${esc(dr.hsai||nx)}"></label><label class="f">Valor total (R$)<input data-dk="hval" inputmode="decimal" value="${esc(dr.hval||"")}"></label></div><div class="actions"><button class="btn primary" type="button" data-ro="hotel">Salvar hotel</button><button class="btn ghost" type="button" data-ro="close">Cancelar</button><p class="msg err" data-smsg></p></div></div>`}
     if(A&&A.kind==="fim"){const falt=ps.filter(p=>!p.feedback);
       h+=falt.length?`<div class="inline-form"><p class="msg err" style="margin:0">Falta registrar como foi a visita em: ${esc(falt.map(p=>p.nome).join(", "))}.</p><div class="actions"><button class="btn ghost" type="button" data-ro="close">Voltar</button></div></div>`
       :`<div class="inline-form"><strong>Encerrar a rota</strong><div class="grid">${num(r.km_painel_ini)==null?`<label class="f">Km do painel na saída <small>opcional</small><input data-dk="kini" inputmode="decimal" value="${esc(dr.kini||"")}"></label>`:`<div class="f"><span class="sub">Km do painel na saída</span><b>${esc(String(r.km_painel_ini))}</b></div>`}<label class="f">Km do painel na chegada <small>opcional</small><input data-dk="kfim" inputmode="decimal" value="${esc(dr.kfim||"")}"></label><label class="f full">Observação do dia <small>opcional</small><textarea data-dk="obs">${esc(dr.obs||"")}</textarea></label></div><div class="actions"><button class="btn ok" type="button" data-ro="fim">Encerrar rota</button><button class="btn ghost" type="button" data-ro="close">Voltar</button><p class="msg err" data-smsg></p></div></div>`}
@@ -1031,6 +1059,12 @@ async function rotaAction(id,what,btn){
       S.ract=null;delete S.rdr[id];render()}
     catch(e){btn.disabled=false;say(errText(e))}
     return}
+  if(what==="hotel"){const nome=g("hnome"),cid=g("hcid"),ent=g("hent")||r.data,sai=g("hsai");const val=parseBR(g("hval"));
+    if(!nome||!cid||!ent||!sai){say("Preencha hotel, cidade, entrada e saída.");return}
+    if(sai<=ent){say("A saída precisa ser depois da entrada.");return}
+    if(Number.isNaN(val)){say("Valor só com números, por exemplo 280,00.");return}
+    const hx={id:rid(),nome,cidade:cid,entrada:ent,saida:sai,noites:nights(ent,sai),valor:val};
+    return done({},`Adicionou hotel ${nome} (${cid}, ${hx.noites} noite${hx.noites===1?"":"s"}${val?", "+brl(val):""})`,{hoteis:[...hoteis(r),hx]})}
   if(what==="fim"){if(ps.some(x=>!x.feedback)){say("Registre o feedback de todas as visitas antes de encerrar.");return}
     const ki=num(r.km_painel_ini)!=null?num(r.km_painel_ini):parseBR(g("kini")),kf=parseBR(g("kfim"));
     if(Number.isNaN(ki)||Number.isNaN(kf)){say("Digite o km do painel só com números.");return}
@@ -1082,9 +1116,9 @@ function rtodasView(view){
   wireRotas(view);
 }
 function exportVisitas(rotas,msgSel){
-  const cols=["Rota","Data","Gerente","Status da rota","Saída","Nº","Cliente","Cidade","Endereço","Objetivo","Km do trecho","Check-in (hora)","Distância do check-in ao cliente (m)","Check-in no local?","Link do mapa","Resultado","Valor do pedido (R$)","O que aconteceu","Próximo passo","Km previsto da rota","Km do painel","Custo combustível da rota (R$)","Veículo","Placa"];
+  const cols=["Rota","Data","Gerente","Status da rota","Saída","Nº","Cliente","Cidade","Endereço","Objetivo","Km do trecho","Check-in (hora)","Distância do check-in ao cliente (m)","Check-in no local?","Link do mapa","Resultado","Valor do pedido (R$)","O que aconteceu","Próximo passo","Km previsto da rota","Km do painel","Custo combustível da rota (R$)","Hotéis","Valor hotéis (R$)","Veículo","Placa"];
   const rows=[];sortRotas(rotas).reverse().forEach(r=>paradas(r).forEach((p,i)=>{const ck=p.checkin||{},fb=p.feedback||{};
-    rows.push([r.codigo,brD(r.data),nameOf(r.gerente_id),rotaPend(r)?"Encerramento pendente":r.status,r.origem,i+1,p.nome,p.cidade,p.endereco,p.objetivo,fmtN(p.kmTrecho),ck.em?fdt(ck.em):"",ck.distM??"",p.checkin?(ck.semGps?"Sem GPS":ckOk(p)?"Sim":ck.distM==null?"Sem referência":"Não"):"Sem check-in",ck.lat!=null?mapsLink(ck.lat,ck.lng):"",fb.resultado?resLabel(fb.resultado):"Pendente",fmtN(fb.valor),fb.obs||"",fb.proximo||"",i===0?fmtN(num(r.km_previsto)):"",i===0?fmtN(kmReal(r)):"",i===0?fmtN(custoRota(r)):"",r.veiculo?r.veiculo.modelo:"",r.veiculo?String(r.veiculo.placa||"").toUpperCase():""])}));
+    rows.push([r.codigo,brD(r.data),nameOf(r.gerente_id),rotaPend(r)?"Encerramento pendente":r.status,r.origem,i+1,p.nome,p.cidade,p.endereco,p.objetivo,fmtN(p.kmTrecho),ck.em?fdt(ck.em):"",ck.distM??"",p.checkin?(ck.semGps?"Sem GPS":ckOk(p)?"Sim":ck.distM==null?"Sem referência":"Não"):"Sem check-in",ck.lat!=null?mapsLink(ck.lat,ck.lng):"",fb.resultado?resLabel(fb.resultado):"Pendente",fmtN(fb.valor),fb.obs||"",fb.proximo||"",i===0?fmtN(num(r.km_previsto)):"",i===0?fmtN(kmReal(r)):"",i===0?fmtN(custoRota(r)):"",i===0?hoteis(r).map(hotelTxt).join(" | "):"",i===0?fmtN(hotelTot(r)):"",r.veiculo?r.veiculo.modelo:"",r.veiculo?String(r.veiculo.placa||"").toUpperCase():""])}));
   saveCsv("visitas-carro-imbat",cols,rows,msgSel);
 }
 
@@ -1094,11 +1128,11 @@ function rcarroView(view){
   const base=S.rotas.filter(r=>r.status!=="Cancelada"&&inPer(r.data,R)&&(!R.ger||r.gerente_id===R.ger));
   const vis=base.flatMap(r=>paradas(r).map(p=>({r,p})));const real=vis.filter(x=>visitou(x.p));
   const ped=real.filter(x=>x.p.feedback.resultado==="pedido");const vPed=ped.reduce((a,x)=>a+(x.p.feedback.valor||0),0);
-  const km=base.reduce((a,r)=>a+(kmUsado(r)||0),0);const custo=base.reduce((a,r)=>a+(custoRota(r)||0),0);
+  const km=base.reduce((a,r)=>a+(kmUsado(r)||0),0);const custo=base.reduce((a,r)=>a+(custoRota(r)||0),0);const hot=base.reduce((a,r)=>a+hotelTot(r),0);const noites=base.reduce((a,r)=>a+hoteis(r).reduce((b,x)=>b+(x.noites||0),0),0);
   const okN=real.filter(x=>ckOk(x.p)).length;
   const pct=(a,b)=>b?Math.round(a/b*100)+"%":"—";
-  const G=new Map();base.forEach(r=>{const g=G.get(r.gerente_id)||{id:r.gerente_id,rotas:0,km:0,custo:0,plan:0,real:0,ok:0,ped:0,vped:0,pend:0,cid:new Set()};
-    g.rotas++;g.km+=kmUsado(r)||0;g.custo+=custoRota(r)||0;if(rotaPend(r))g.pend++;
+  const G=new Map();base.forEach(r=>{const g=G.get(r.gerente_id)||{id:r.gerente_id,rotas:0,km:0,custo:0,hot:0,plan:0,real:0,ok:0,ped:0,vped:0,pend:0,cid:new Set()};
+    g.rotas++;g.km+=kmUsado(r)||0;g.custo+=custoRota(r)||0;g.hot+=hotelTot(r);if(rotaPend(r))g.pend++;
     paradas(r).forEach(p=>{g.plan++;if(p.cidade)g.cid.add(p.cidade);if(visitou(p)){g.real++;if(ckOk(p))g.ok++;if(p.feedback.resultado==="pedido"){g.ped++;g.vped+=p.feedback.valor||0}}});G.set(r.gerente_id,g)});
   const gs=[...G.values()].sort((a,b)=>b.real-a.real||nameOf(a.id).localeCompare(nameOf(b.id)));
   const C=new Map();real.forEach(({r,p})=>{const k=normKey(p.cidade)||"-";const c=C.get(k)||{cidade:p.cidade||"Sem cidade",vis:0,cli:new Set(),ger:new Set(),ped:0,vped:0};c.vis++;c.cli.add(p.clienteId||p.nome);c.ger.add(r.gerente_id);if(p.feedback.resultado==="pedido"){c.ped++;c.vped+=p.feedback.valor||0}C.set(k,c)});
@@ -1108,12 +1142,12 @@ function rcarroView(view){
   view.innerHTML=`<div class="panel" style="gap:16px"><div><h2>Relatório de viagens de carro</h2><p class="hint">Km rodados, custo de combustível e resultado das visitas. Usa o km do painel quando o gerente informa; senão, o km calculado pelo mapa. Rotas canceladas ficam de fora.</p></div>
   ${perHtml(R,"rc",gerentesRotas())}
   <div class="rhead"><span class="role">${esc(perLabel(R))}</span>${R.ger?`<span class="role">${esc(nameOf(R.ger))}</span>`:""}</div>
-  <div class="kpis"><div><span class="k">Rotas</span><span class="v">${base.length}</span></div><div><span class="k">Km rodados</span><span class="v">${kmF(Math.round(km))}</span></div><div><span class="k">Combustível</span><span class="v">${brl(custo)}</span></div>
+  <div class="kpis"><div><span class="k">Rotas</span><span class="v">${base.length}</span></div><div><span class="k">Km rodados</span><span class="v">${kmF(Math.round(km))}</span></div><div><span class="k">Combustível</span><span class="v">${brl(custo)}</span></div><div><span class="k">Hotel</span><span class="v">${brl(hot)} <small>${noites} noite${noites===1?"":"s"}</small></span></div>
   <div><span class="k">Visitas feitas</span><span class="v">${real.length} <small>de ${vis.length} planejadas</small></span></div><div><span class="k">Check-in no local</span><span class="v">${pct(okN,real.length)}</span></div><div><span class="k">Pedidos fechados</span><span class="v">${ped.length} <small>${brl(vPed)}</small></span></div></div>
   ${base.length?`
   <section class="rsec"><div class="rsec-h"><h3>Por gerente</h3>${can("exportar")?`<button class="btn" id="rc-csv-g" type="button">Exportar resumo</button>`:""}</div>
-  <div class="tscroll"><table class="vt sum"><thead><tr><th>Gerente</th><th class="num">Rotas</th><th class="num">Km</th><th class="num">Combustível</th><th class="num">Visitas</th><th class="num">Check-in no local</th><th class="num">Pedidos</th><th class="num">Valor pedidos</th><th class="num">Cidades</th><th class="num">Pendentes</th></tr></thead>
-  <tbody>${gs.map(g=>`<tr><td><b>${esc(nameOf(g.id))}</b></td><td class="num">${g.rotas}</td><td class="num">${kmF(Math.round(g.km))}</td><td class="num">${brl(g.custo)}</td><td class="num">${g.real} <span class="sub">de ${g.plan}</span></td><td class="num">${pct(g.ok,g.real)}</td><td class="num">${g.ped}</td><td class="num">${brl(g.vped)}</td><td class="num">${g.cid.size}</td><td class="num">${g.pend?`<span class="up">${g.pend}</span>`:"—"}</td></tr>`).join("")}</tbody></table></div></section>
+  <div class="tscroll"><table class="vt sum"><thead><tr><th>Gerente</th><th class="num">Rotas</th><th class="num">Km</th><th class="num">Combustível</th><th class="num">Hotel</th><th class="num">Visitas</th><th class="num">Check-in no local</th><th class="num">Pedidos</th><th class="num">Valor pedidos</th><th class="num">Cidades</th><th class="num">Pendentes</th></tr></thead>
+  <tbody>${gs.map(g=>`<tr><td><b>${esc(nameOf(g.id))}</b></td><td class="num">${g.rotas}</td><td class="num">${kmF(Math.round(g.km))}</td><td class="num">${brl(g.custo)}</td><td class="num">${brl(g.hot)}</td><td class="num">${g.real} <span class="sub">de ${g.plan}</span></td><td class="num">${pct(g.ok,g.real)}</td><td class="num">${g.ped}</td><td class="num">${brl(g.vped)}</td><td class="num">${g.cid.size}</td><td class="num">${g.pend?`<span class="up">${g.pend}</span>`:"—"}</td></tr>`).join("")}</tbody></table></div></section>
   <section class="rsec"><div class="rsec-h"><h3>Resultado das visitas</h3></div><div class="kpis">${RES.map(([l,n])=>`<div><span class="k">${esc(l)}</span><span class="v">${n}</span></div>`).join("")}</div></section>
   <section class="rsec"><div class="rsec-h"><h3>Por cidade</h3></div>
   ${cs.length?`<div class="tscroll"><table class="vt sum"><thead><tr><th>Cidade</th><th class="num">Visitas</th><th class="num">Clientes</th><th class="num">Gerentes</th><th class="num">Pedidos</th><th class="num">Valor pedidos</th></tr></thead><tbody>${cs.map(c=>`<tr><td><b>${esc(c.cidade)}</b></td><td class="num">${c.vis}</td><td class="num">${c.cli.size}</td><td class="num">${c.ger.size}</td><td class="num">${c.ped}</td><td class="num">${brl(c.vped)}</td></tr>`).join("")}</tbody></table></div>`:`<p class="hint">Nenhuma visita realizada no período.</p>`}</section>
@@ -1125,8 +1159,8 @@ function rcarroView(view){
   <p class="msg" id="rc-msg" role="status"></p></div>`;
   perWire(view,R,"rc");
   const b1=view.querySelector("#rc-csv");if(b1)b1.onclick=()=>exportVisitas(base,"#rc-msg");
-  const b2=view.querySelector("#rc-csv-g");if(b2)b2.onclick=()=>saveCsv("resumo-carro-imbat",["Gerente","Rotas","Km","Combustível (R$)","Visitas planejadas","Visitas feitas","Check-in no local","Pedidos","Valor pedidos (R$)","Cidades","Rotas pendentes"],
-    [[`Período: ${perLabel(R)}`],...gs.map(g=>[nameOf(g.id),g.rotas,fmtN(Math.round(g.km*10)/10),fmtN(Math.round(g.custo*100)/100),g.plan,g.real,g.ok,g.ped,fmtN(g.vped),g.cid.size,g.pend])],"#rc-msg");
+  const b2=view.querySelector("#rc-csv-g");if(b2)b2.onclick=()=>saveCsv("resumo-carro-imbat",["Gerente","Rotas","Km","Combustível (R$)","Hotel (R$)","Visitas planejadas","Visitas feitas","Check-in no local","Pedidos","Valor pedidos (R$)","Cidades","Rotas pendentes"],
+    [[`Período: ${perLabel(R)}`],...gs.map(g=>[nameOf(g.id),g.rotas,fmtN(Math.round(g.km*10)/10),fmtN(Math.round(g.custo*100)/100),fmtN(g.hot),g.plan,g.real,g.ok,g.ped,fmtN(g.vped),g.cid.size,g.pend])],"#rc-msg");
 }
 
 /* ---------- Relatório geral por gerente (aéreo + carro) ---------- */
@@ -1136,20 +1170,20 @@ function rgeralView(view){
   const car=S.rotas.filter(r=>r.status!=="Cancelada"&&inPer(r.data,R));
   const P=new Map();const pg=id=>P.get(id)||(P.set(id,{id,an:0,av:0,rn:0,km:0,rv:0,vis:0,ped:0,vped:0,cid:new Set()}),P.get(id));
   aer.forEach(v=>{const g=pg(v.solicitanteId);g.an++;g.av+=totalFinal(v)||0;if(v.destino)g.cid.add(v.destino.trim())});
-  car.forEach(r=>{const g=pg(r.gerente_id);g.rn++;g.km+=kmUsado(r)||0;g.rv+=custoRota(r)||0;paradas(r).forEach(p=>{if(visitou(p)){g.vis++;if(p.cidade)g.cid.add(p.cidade);if(p.feedback.resultado==="pedido"){g.ped++;g.vped+=p.feedback.valor||0}}})});
+  car.forEach(r=>{const g=pg(r.gerente_id);g.rn++;g.km+=kmUsado(r)||0;g.rv+=(custoRota(r)||0)+hotelTot(r);paradas(r).forEach(p=>{if(visitou(p)){g.vis++;if(p.cidade)g.cid.add(p.cidade);if(p.feedback.resultado==="pedido"){g.ped++;g.vped+=p.feedback.valor||0}}})});
   const ps=[...P.values()].sort((a,b)=>(b.av+b.rv)-(a.av+a.rv)||nameOf(a.id).localeCompare(nameOf(b.id)));
   if(R.sel&&!P.has(R.sel))R.sel="";
   const T=ps.reduce((a,g)=>{for(const k of ["an","av","rn","km","rv","vis","ped","vped"])a[k]+=g[k];return a},{an:0,av:0,rn:0,km:0,rv:0,vis:0,ped:0,vped:0});
   let tl="";
   if(R.sel){const items=[...aer.filter(v=>v.solicitanteId===R.sel).map(v=>({d:v.ida,h:`<span class="tl-ic">✈️</span><div><b>${fd(v.ida)} a ${fd(v.volta)} · ${esc(v.origem)} → ${esc(v.destino)}</b><div class="sub">${esc(v.motivo||"")}${v.evento?" · "+esc(v.evento):""} · ${esc(v.status)}${sv&&totalFinal(v)!=null?" · "+brl(totalFinal(v)):""}</div></div>`})),
-      ...car.filter(r=>r.gerente_id===R.sel).map(r=>{const p=paradas(r);const cid=[...new Set(p.map(x=>x.cidade).filter(Boolean))];return {d:r.data,h:`<span class="tl-ic">🚗</span><div><b>${fd(r.data)} · ${esc(cidadeCurta(r.origem)||r.origem)} → ${esc(cid.join(", ")||"—")}</b><div class="sub">${p.filter(visitou).length} de ${p.length} visitas · ${kmF(kmUsado(r))}${custoRota(r)!=null?" · "+brl(custoRota(r)):""}${rotaPend(r)?" · encerramento pendente":""}</div><div class="sub">${esc(p.map(x=>x.nome+(x.feedback?` (${resLabel(x.feedback.resultado)})`:"")).join(" · "))}</div></div>`}})].sort((a,b)=>(a.d||"").localeCompare(b.d||""));
+      ...car.filter(r=>r.gerente_id===R.sel).map(r=>{const p=paradas(r);const cid=[...new Set(p.map(x=>x.cidade).filter(Boolean))];return {d:r.data,h:`<span class="tl-ic">🚗</span><div><b>${fd(r.data)} · ${esc(cidadeCurta(r.origem)||r.origem)} → ${esc(cid.join(", ")||"—")}</b><div class="sub">${p.filter(visitou).length} de ${p.length} visitas · ${kmF(kmUsado(r))}${custoRota(r)!=null?" · "+brl(custoRota(r)):""}${hoteis(r).length?" · 🏨 "+esc(hoteis(r).map(x=>x.nome).join(", "))+(hotelTot(r)?" "+brl(hotelTot(r)):""):""}${rotaPend(r)?" · encerramento pendente":""}</div><div class="sub">${esc(p.map(x=>x.nome+(x.feedback?` (${resLabel(x.feedback.resultado)})`:"")).join(" · "))}</div></div>`}})].sort((a,b)=>(a.d||"").localeCompare(b.d||""));
     tl=`<section class="rsec"><div class="rsec-h"><h3>Linha do tempo de ${esc(nameOf(R.sel))}</h3><button class="btn ghost" id="rg-clear" type="button">Fechar</button></div><div class="tl">${items.map(x=>`<div class="tl-it">${x.h}</div>`).join("")||`<p class="hint">Sem viagens no período.</p>`}</div></section>`}
   view.innerHTML=`<div class="panel" style="gap:16px"><div><h2>Relatório geral por gerente</h2><p class="hint">Viagens aéreas e de carro juntas: quanto cada gerente gastou, por onde passou e o resultado das visitas. Toque em um nome para ver a linha do tempo.</p></div>
   ${perHtml(R,"rg")}
   <div class="rhead"><span class="role">${esc(perLabel(R))}</span></div>
   <div class="kpis">${sv?`<div><span class="k">Total gasto</span><span class="v">${brl(T.av+T.rv)}</span></div><div><span class="k">Aéreo</span><span class="v">${brl(T.av)} <small>${T.an} viage${T.an===1?"m":"ns"}</small></span></div>`:`<div><span class="k">Viagens aéreas</span><span class="v">${T.an}</span></div>`}<div><span class="k">Carro</span><span class="v">${brl(T.rv)} <small>${T.rn} rota${T.rn===1?"":"s"} · ${kmF(Math.round(T.km))}</small></span></div><div><span class="k">Visitas feitas</span><span class="v">${T.vis}</span></div><div><span class="k">Pedidos fechados</span><span class="v">${T.ped} <small>${brl(T.vped)}</small></span></div></div>
   ${ps.length?`<section class="rsec"><div class="rsec-h"><h3>Por gerente</h3>${can("exportar")?`<button class="btn" id="rg-csv" type="button">Exportar</button>`:""}</div>
-  <div class="tscroll"><table class="vt sum"><thead><tr><th>Gerente</th><th class="num">Viagens aéreas</th>${sv?`<th class="num">Gasto aéreo</th>`:""}<th class="num">Rotas de carro</th><th class="num">Km</th><th class="num">Gasto carro</th>${sv?`<th class="num">Total gasto</th>`:""}<th class="num">Visitas</th><th class="num">Pedidos</th><th>Cidades</th></tr></thead>
+  <div class="tscroll"><table class="vt sum"><thead><tr><th>Gerente</th><th class="num">Viagens aéreas</th>${sv?`<th class="num">Gasto aéreo</th>`:""}<th class="num">Rotas de carro</th><th class="num">Km</th><th class="num">Gasto carro <small class="sub">combustível + hotel</small></th>${sv?`<th class="num">Total gasto</th>`:""}<th class="num">Visitas</th><th class="num">Pedidos</th><th>Cidades</th></tr></thead>
   <tbody>${ps.map(g=>`<tr class="click${R.sel===g.id?" sel":""}" data-g="${esc(g.id)}" tabindex="0"><td><b>${esc(nameOf(g.id))}</b></td><td class="num">${g.an}</td>${sv?`<td class="num">${brl(g.av)}</td>`:""}<td class="num">${g.rn}</td><td class="num">${kmF(Math.round(g.km))}</td><td class="num">${brl(g.rv)}</td>${sv?`<td class="num"><b>${brl(g.av+g.rv)}</b></td>`:""}<td class="num">${g.vis}</td><td class="num">${g.ped}${g.vped?` <span class="sub">${brl(g.vped)}</span>`:""}</td><td class="obs">${esc([...g.cid].join(", "))}</td></tr>`).join("")}</tbody></table></div></section>${tl}`
   :`<div class="empty"><b>Nenhuma viagem em ${esc(perLabel(R).toLowerCase())}</b><span>Escolha outro período.</span></div>`}
   <p class="msg" id="rg-msg" role="status"></p></div>`;
