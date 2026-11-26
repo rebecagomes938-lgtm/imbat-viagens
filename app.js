@@ -34,6 +34,9 @@ const COL_KEYS=new Set(["status","ida","volta"]);
 function toTrip(r,fin){return {...(r.doc||{}),...(fin||{}),id:r.id,codigo:r.codigo,criadoEm:r.criado_em,solicitanteId:r.solicitante_id,status:r.status,
   colaborador:r.colaborador,departamento:r.departamento,origem:r.origem,destino:r.destino,ida:r.ida,volta:r.volta,horario:r.horario,motivo:r.motivo,
   evento:r.evento,hospedagem:r.hospedagem,transporte:r.transporte,observacoes:r.observacoes,_doc:r.doc||{},_fin:fin}}
+const hoteisV=v=>Array.isArray(v.hoteis)&&v.hoteis.length?v.hoteis:(v.hotel&&v.hotel.nome?[v.hotel]:[]);
+const hotelVTot=v=>hoteisV(v).reduce((a,x)=>a+(Number(x.valor)||0),0);
+const hotelVTxt=x=>[x.nome,x.cidade,x.entrada&&x.saida?`${nights(x.entrada,x.saida)} noite${nights(x.entrada,x.saida)===1?"":"s"} (${fds(x.entrada)} a ${fds(x.saida)})`:"",x.endereco].filter(Boolean).join(" · ");
 const semValores=s=>String(s).replace(/\s*\([^()]*R\$[^()]*\)/g,"").replace(/[:,]?\s*(?:custo|total|passagem|hospedagem|outros)?\s*R\$\s?[\d.,]+/gi,"").replace(/\s{2,}/g," ").trim();
 const dbErr=e=>{const m=(e&&e.message)||"";if(/permiss|permission|row-level|policy/i.test(m))return {code:"perm",message:m};return {code:e&&e.code||"x",message:m}};
 async function saveTrip(v,patch){
@@ -51,7 +54,7 @@ async function saveTrip(v,patch){
 async function addTrip(d,now){
   const {error}=await S.sb.from("viagens").insert({codigo:tripCode(),solicitante_id:S.myId,status:"Pendente",colaborador:d.colaborador,departamento:d.departamento,
     origem:d.origem,destino:d.destino,ida:d.ida,volta:d.volta,horario:d.horario,motivo:d.motivo,evento:d.evento,hospedagem:d.hospedagem,transporte:d.transporte,
-    observacoes:d.observacoes,doc:{...(d.voltaDif?{rotaVolta:{de:d.voltaDe,para:d.voltaPara}}:{}),...(d.hospedagem==="Sim"?{hotel:{nome:d.hotelNome,endereco:d.hotelEnd,valor:d.hotelVal}}:{}),historico:[{em:now,porId:S.myId,acao:"Solicitação enviada"}]}});
+    observacoes:d.observacoes,doc:{...(d.voltaDif?{rotaVolta:{de:d.voltaDe,para:d.voltaPara}}:{}),...(d.hospedagem==="Sim"&&d.hoteis.length?{hoteis:d.hoteis,hotel:d.hoteis[0]}:{}),historico:[{em:now,porId:S.myId,acao:"Solicitação enviada"}]}});
   if(error)throw dbErr(error);await loadAll();
 }
 async function loadAll(){
@@ -211,15 +214,32 @@ function buildNova(){
   f.querySelector("#n-ida").addEventListener("change",e=>{f.querySelector("#n-volta").min=e.target.value||today()});
   const vd=f.querySelector("#n-voltadif"),vb=f.querySelector("#n-voltabox");
   vd.onchange=()=>{vb.hidden=!vd.checked;if(vd.checked&&!f.querySelector("#n-voltade").value)f.querySelector("#n-voltade").value=f.querySelector("#n-destino").value.trim()};
-  const hb=f.querySelector("#n-hotelbox");const hsync=()=>{hb.hidden=f.querySelector('input[name="n-hosp"]:checked').value!=="Sim"};
+  const hb=f.querySelector("#n-hotelbox"),hl=f.querySelector("#n-hoteis");let H=[];
+  const novoHotel=()=>{const ida=f.querySelector("#n-ida").value,volta=f.querySelector("#n-volta").value;const ant=H[H.length-1];
+    return {nome:"",cidade:H.length?"":f.querySelector("#n-destino").value.trim(),entrada:ant?ant.saida:ida,saida:volta,valor:"",endereco:""}};
+  const drawH=()=>{hl.innerHTML=H.map((x,i)=>`<div class="sted" data-h="${i}"><div class="sted-h"><b style="flex:1">🏨 Hotel ${i+1}</b>${H.length>1?`<button class="btn ghost" type="button" data-hdel="${i}">Remover</button>`:""}</div>
+    <div class="grid"><label class="f">Hotel <small>nome do hotel que você quer ficar</small><input data-hk="nome" value="${esc(x.nome)}" placeholder="Ex.: Ibis Paulista"></label>
+    <label class="f">Cidade<input data-hk="cidade" value="${esc(x.cidade)}" placeholder="Ex.: Campinas"></label>
+    <label class="f">Entrada<input type="date" data-hk="entrada" value="${esc(x.entrada)}"></label>
+    <label class="f">Saída<input type="date" data-hk="saida" value="${esc(x.saida)}"></label>
+    <label class="f">Valor total deste hotel (R$) <small>opcional</small><input data-hk="valor" inputmode="decimal" value="${esc(x.valor)}" placeholder="Ex.: 650,00"></label>
+    <label class="f">Endereço ou bairro <small>opcional</small><input data-hk="endereco" value="${esc(x.endereco)}" placeholder="Perto de qual cliente?"></label></div></div>`).join("");
+    hl.querySelectorAll("[data-hk]").forEach(inp=>inp.oninput=inp.onchange=()=>{H[+inp.closest("[data-h]").dataset.h][inp.dataset.hk]=inp.value});
+    hl.querySelectorAll("[data-hdel]").forEach(b=>b.onclick=()=>{H.splice(+b.dataset.hdel,1);drawH()})};
+  const resetH=()=>{H=[novoHotel()];drawH()};resetH();
+  f.querySelector("#n-addhotel").onclick=()=>{H.push(novoHotel());drawH();const l=hl.lastElementChild;if(l)l.querySelector('[data-hk="nome"]').focus()};
+  const syncDatas=()=>{if(H.length===1){const ida=f.querySelector("#n-ida").value,volta=f.querySelector("#n-volta").value;if(ida)H[0].entrada=ida;if(volta)H[0].saida=volta;drawH()}};
+  f.querySelector("#n-ida").addEventListener("change",syncDatas);f.querySelector("#n-volta").addEventListener("change",syncDatas);
+  f.querySelector("#n-destino").addEventListener("change",()=>{if(H.length===1&&!H[0].cidade){H[0].cidade=f.querySelector("#n-destino").value.trim();drawH()}});
+  const hsync=()=>{hb.hidden=f.querySelector('input[name="n-hosp"]:checked').value!=="Sim"};
   f.querySelectorAll('input[name="n-hosp"]').forEach(x=>x.onchange=hsync);
-  f.addEventListener("reset",()=>setTimeout(()=>{vb.hidden=true;hsync()},0));
+  f.addEventListener("reset",()=>setTimeout(()=>{vb.hidden=true;hsync();resetH()},0));
   f.onsubmit=async e=>{e.preventDefault();if(S.busy)return;
     const g=id=>f.querySelector(id).value.trim();const msg=f.querySelector("#n-msg");
     const d={colaborador:g("#n-colab"),departamento:g("#n-dep"),origem:g("#n-origem"),destino:g("#n-destino"),ida:g("#n-ida"),volta:g("#n-volta"),horario:g("#n-hora"),motivo:g("#n-motivo"),evento:g("#n-evento"),
       hospedagem:f.querySelector('input[name="n-hosp"]:checked').value,transporte:f.querySelector('input[name="n-transp"]:checked').value,observacoes:g("#n-obs"),
       voltaDif:f.querySelector("#n-voltadif").checked,voltaDe:g("#n-voltade"),voltaPara:g("#n-voltapara"),
-      hotelNome:g("#n-hotel"),hotelEnd:g("#n-hotelend"),hotelVal:parseBR(g("#n-hotelval"))};
+      hoteis:H.map(x=>({nome:x.nome.trim(),cidade:x.cidade.trim(),entrada:x.entrada,saida:x.saida,valor:parseBR(x.valor),endereco:x.endereco.trim()}))};
     const miss=[["colaborador","quem vai viajar"],["departamento","o departamento"],["origem","a cidade de origem"],["destino","a cidade de destino"],["ida","a data de ida"],["volta","a data de volta"],
       ...(d.voltaDif?[["voltaDe","de onde sai a volta"],["voltaPara","para onde é a volta"]]:[]),["horario","o horário preferencial"],["motivo","o motivo"],["evento","o cliente que vai visitar"],["observacoes","as observações"]].filter(([k])=>!d[k]).map(x=>x[1]);
     msg.className="msg err";
@@ -227,8 +247,16 @@ function buildNova(){
     if(miss.length){msg.textContent="Falta preencher "+miss.join(", ")+".";return}
     if(d.ida<today()){msg.textContent="A data de ida já passou. Escolha uma data a partir de hoje.";return}
     if(d.volta<d.ida){msg.textContent="A data de volta é anterior à data de ida.";return}
-    if(d.hospedagem==="Sim"&&!d.hotelNome){msg.textContent="Informe o hotel em que você quer ficar.";return}
-    if(Number.isNaN(d.hotelVal)){msg.textContent="Valor do hotel: use só números, por exemplo 650,00.";return}
+    if(d.hospedagem==="Sim"){
+      if(!d.hoteis.length){msg.textContent="Informe o hotel em que você quer ficar.";return}
+      for(const[i,x]of d.hoteis.entries()){const t=d.hoteis.length>1?`Hotel ${i+1}: `:"Hotel: ";
+        if(!x.nome||!x.cidade||!x.entrada||!x.saida){msg.textContent=t+"preencha nome, cidade, entrada e saída.";return}
+        if(x.saida<=x.entrada){msg.textContent=t+"a saída precisa ser depois da entrada.";return}
+        if(x.entrada<d.ida||x.saida>d.volta){msg.textContent=t+"as datas precisam ficar entre a ida e a volta da viagem.";return}
+        if(Number.isNaN(x.valor)){msg.textContent=t+"valor só com números, por exemplo 650,00.";return}}
+      const ord=[...d.hoteis].sort((a,b)=>a.entrada.localeCompare(b.entrada));
+      for(let i=1;i<ord.length;i++)if(ord[i].entrada<ord[i-1].saida){msg.textContent=`As datas de ${ord[i-1].nome} e ${ord[i].nome} se sobrepõem. A entrada de um precisa ser no dia da saída do outro ou depois.`;return}
+      d.hoteis=ord}
     const now=new Date().toISOString();
     S.busy=true;f.querySelector("#n-enviar").disabled=true;
     try{await addTrip(d,now);
@@ -288,7 +316,7 @@ function quoteForm(v,q,dr){
   <label class="f">Voo de ida<input id="a-qida-${v.id}" value="${g("ida",q.vooIda)}" placeholder="Ex.: 10/11 07:10, direto"></label>
   <label class="f">Voo de volta<input id="a-qvolta-${v.id}" value="${g("volta",q.vooVolta)}" placeholder="Ex.: 13/11 19:40, 1 escala"></label>
   <label class="f">Bagagem<input id="a-qbag-${v.id}" value="${g("bag",q.bagagem)}" placeholder="Ex.: mão + 1 mala"></label>
-  <label class="f">Hotel<input id="a-qhotel-${v.id}" value="${g("hotel",q.hotel)}" placeholder="Nome e distância do evento"></label>
+  <label class="f">Hotel<input id="a-qhotel-${v.id}" value="${g("hotel",q.hotel)}" placeholder="Nome(s) do(s) hotel(is) e distância do cliente"></label>
   <label class="f">Passagem (R$)<input id="a-qpas-${v.id}" inputmode="decimal" value="${g("pas",fmtN(q.passagem))}"></label>
   <label class="f">Hospedagem (R$)<input id="a-qhos-${v.id}" inputmode="decimal" value="${g("hos",fmtN(q.hospedagem))}"></label>
   <label class="f">Outros (R$) <small>opcional</small><input id="a-qout-${v.id}" inputmode="decimal" value="${g("out",q.outros?fmtN(q.outros):"")}"></label>
@@ -351,7 +379,7 @@ function card(v){
   <div><span class="k">Motivo</span>${esc(v.motivo)}</div>
   <div><span class="k">Cliente / feira</span>${esc(v.evento||"—")}</div>
   <div><span class="k">Transporte local</span>${esc(v.transporte)}</div>
-  ${v.hospedagem==="Sim"&&v.hotel&&v.hotel.nome?`<div style="grid-column:1/-1"><span class="k">🏨 Hotel indicado pelo viajante</span>${esc(v.hotel.nome)}${v.hotel.endereco?" · "+esc(v.hotel.endereco):""}${v.hotel.valor?` · <b>${esc(brl(v.hotel.valor))}</b>`:""}</div>`:""}
+  ${v.hospedagem==="Sim"&&hoteisV(v).length?`<div style="grid-column:1/-1"><span class="k">🏨 ${hoteisV(v).length>1?hoteisV(v).length+" hotéis indicados":"Hotel indicado"} pelo viajante</span>${hoteisV(v).map(x=>esc(hotelVTxt(x))+(x.valor?` · <b>${esc(brl(x.valor))}</b>`:"")).join("<br>")}${hoteisV(v).length>1&&hotelVTot(v)?`<br><b>Total indicado: ${esc(brl(hotelVTot(v)))}</b>`:""}</div>`:""}
   ${v.observacoes?`<div style="grid-column:1/-1"><span class="k">Observações</span>${esc(v.observacoes)}</div>`:""}</div>`;
   if(v.sugestao&&v.status==="Nova data sugerida"){
     h+=`<div class="note sug"><strong>${esc(nameOf(v.sugestao.porId))} sugeriu outras datas</strong><span>Ida ${fd(v.sugestao.ida)} · Volta ${fd(v.sugestao.volta)}</span>${v.sugestao.motivo?`<span>${esc(v.sugestao.motivo)}</span>`:""}</div>`;
@@ -430,8 +458,8 @@ async function saveCsv(name,cols,rows,msgSel){
 }
 function exportCsv(msgSel){
   const sv=seesValues();
-  const cols=["Protocolo","Data da solicitação","Colaborador","Departamento","Solicitado por","Cidade de origem","Cidade de destino","Data de ida","Data de volta","Ida original","Volta original","Volta saindo de","Volta chegando em","Horário preferencial","Motivo","Cliente / feira","Necessita hospedagem?","Diárias","Transporte local?","Status","Hotel indicado","Endereço do hotel","Valor indicado do hotel (R$)","Observações",...(sv?["Passagem (R$)","Hospedagem (R$)","Outros (R$)","Valor original (R$)","Nº de alterações","Custo das alterações (R$)","Total final (R$)","Observação sobre valores"]:[]),"Decidido por","Data da decisão","Comentário da decisão","Compra","Compra decidida por","Data da decisão da compra","Comentário da compra","Feedback","Data do feedback","Clientes visitados","O que foi fazer","O que foi cumprido","Objetivo atingido","Cadastrou clientes?","Clientes cadastrados"];
-  const rows=sortTrips(S.viagens).reverse().map(v=>[v.codigo,brD(v.criadoEm),v.colaborador,v.departamento,nameOf(v.solicitanteId),v.origem,v.destino,brD(v.ida),brD(v.volta),brD(v.datasOriginais&&v.datasOriginais.ida),brD(v.datasOriginais&&v.datasOriginais.volta),rotaVolta(v)?rotaVolta(v).de:"",rotaVolta(v)?rotaVolta(v).para:"",v.horario,v.motivo,v.evento,v.hospedagem,v.hospedagem==="Sim"?nights(v.ida,v.volta):0,v.transporte,v.status==="Pendente"?"Aguardando aprovação":v.status,v.hotel?v.hotel.nome:"",v.hotel?v.hotel.endereco:"",v.hotel?fmtN(v.hotel.valor):"",v.observacoes,
+  const cols=["Protocolo","Data da solicitação","Colaborador","Departamento","Solicitado por","Cidade de origem","Cidade de destino","Data de ida","Data de volta","Ida original","Volta original","Volta saindo de","Volta chegando em","Horário preferencial","Motivo","Cliente / feira","Necessita hospedagem?","Diárias","Transporte local?","Status","Hotéis indicados","Endereço dos hotéis","Valor indicado dos hotéis (R$)","Observações",...(sv?["Passagem (R$)","Hospedagem (R$)","Outros (R$)","Valor original (R$)","Nº de alterações","Custo das alterações (R$)","Total final (R$)","Observação sobre valores"]:[]),"Decidido por","Data da decisão","Comentário da decisão","Compra","Compra decidida por","Data da decisão da compra","Comentário da compra","Feedback","Data do feedback","Clientes visitados","O que foi fazer","O que foi cumprido","Objetivo atingido","Cadastrou clientes?","Clientes cadastrados"];
+  const rows=sortTrips(S.viagens).reverse().map(v=>[v.codigo,brD(v.criadoEm),v.colaborador,v.departamento,nameOf(v.solicitanteId),v.origem,v.destino,brD(v.ida),brD(v.volta),brD(v.datasOriginais&&v.datasOriginais.ida),brD(v.datasOriginais&&v.datasOriginais.volta),rotaVolta(v)?rotaVolta(v).de:"",rotaVolta(v)?rotaVolta(v).para:"",v.horario,v.motivo,v.evento,v.hospedagem,v.hospedagem==="Sim"?nights(v.ida,v.volta):0,v.transporte,v.status==="Pendente"?"Aguardando aprovação":v.status,hoteisV(v).map(x=>[x.nome,x.cidade,x.entrada&&x.saida?brD(x.entrada)+" a "+brD(x.saida):""].filter(Boolean).join(" – ")).join(" | "),hoteisV(v).map(x=>x.endereco||"").filter(Boolean).join(" | "),hotelVTot(v)?fmtN(hotelVTot(v)):"",v.observacoes,
     ...(sv?[fmtN(v.valores&&v.valores.passagem),fmtN(v.valores&&v.valores.hospedagem),fmtN(v.valores&&v.valores.outros),fmtN(totalOf(v)),alts(v).length,fmtN(altCost(v)),fmtN(totalFinal(v)),obsAlt(v)]:[]),
     v.decisao?nameOf(v.decisao.porId):"",v.decisao?brD(v.decisao.em):"",v.decisao?v.decisao.comentario:"",compraOf(v)||"",v.compra&&v.compra.porId?nameOf(v.compra.porId):"",v.compra&&v.compra.em?brD(v.compra.em):"",v.compra?v.compra.comentario:"",v.feedback?"Enviado":precisaFb(v)?"Pendente":"",v.feedback?brD(v.feedback.em):"",...(v.feedback?[v.feedback.clientes,v.feedback.objetivo,v.feedback.cumprido,v.feedback.atingido,v.feedback.cadastros,v.feedback.cadastrosQuais]:["","","","","",""])]);
   saveCsv("viagens-imbat",cols,rows,msgSel);
