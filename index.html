@@ -251,10 +251,9 @@ nav.modes .count{font-family:var(--f-mono);font-size:11px;background:var(--pend-
         <div><div style="font-size:13px;font-weight:500;margin-bottom:5px">Precisa de hospedagem?</div><div class="seg"><label><input type="radio" name="n-hosp" value="Sim" checked> Sim</label><label><input type="radio" name="n-hosp" value="Não"> Não</label></div></div>
         <div><div style="font-size:13px;font-weight:500;margin-bottom:5px">Precisa de transporte local?</div><div class="seg"><label><input type="radio" name="n-transp" value="Sim"> Sim</label><label><input type="radio" name="n-transp" value="Não" checked> Não</label></div></div>
       </div>
-      <div class="f full" id="n-hotelbox"><div class="grid" style="background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:12px">
-        <label class="f">Hotel <small>nome do hotel que você quer ficar</small><input id="n-hotel" placeholder="Ex.: Ibis Paulista"></label>
-        <label class="f">Valor total da hospedagem (R$) <small>opcional</small><input id="n-hotelval" inputmode="decimal" placeholder="Ex.: 650,00"></label>
-        <label class="f full">Endereço ou bairro do hotel <small>opcional</small><input id="n-hotelend" placeholder="Ex.: Av. Paulista, 2355 – São Paulo"></label></div></div>
+      <div class="f full" id="n-hotelbox"><div style="background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:10px">
+        <div class="sted-list" id="n-hoteis"></div>
+        <div class="actions" style="margin:0"><button class="btn" type="button" id="n-addhotel">+ Adicionar outro hotel</button><span class="sub">Vai ficar em mais de uma cidade? Adicione um hotel para cada cidade, com as datas de entrada e saída.</span></div></div></div>
       <label class="f full">Observações<textarea id="n-obs" placeholder="Horário do evento, preferências, flexibilidade de datas…"></textarea></label>
     </div>
     <div class="actions"><button class="btn primary" type="submit" id="n-enviar">Enviar solicitação</button><p class="msg" id="n-msg" role="status"></p></div>
